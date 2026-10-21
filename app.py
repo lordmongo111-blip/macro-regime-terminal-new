@@ -91,7 +91,7 @@ st.warning("Datenstatus: Ohne konfigurierte Datenquelle werden keine aktuellen M
 
 with st.sidebar:
     st.header("Einstellungen")
-    page = st.radio("Modul", ["Übersicht", "FX Macro", "Makroanalyse & G10", "Saisonalität", "COT / Positioning", "NQ & ES", "Quant & Regression", "Datenquellen"])
+ page = st.radio("Modul", ["Übersicht", "FX Signal", "FX Macro", "Makroanalyse & G10", "Saisonalität", "COT / Positioning", "NQ & ES", "Quant & Regression", "Datenquellen"])
     st.divider()
     try:
         saved_fred_key = st.secrets.get("FRED_API_KEY", "")
