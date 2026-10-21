@@ -85,13 +85,88 @@ def cot_api_preview():
     response.raise_for_status()
     return pd.DataFrame(response.json())
 
+# ---------------- FX signal engine: fail closed on missing/invalid inputs ----------------
+FX_PAIRS = {
+    "EUR/USD": {"symbol": "EURUSD=X", "base": "EUR", "quote": "USD", "cot": "6E"},
+    "GBP/USD": {"symbol": "GBPUSD=X", "base": "GBP", "quote": "USD", "cot": "6B"},
+    "USD/JPY": {"symbol": "JPY=X", "base": "USD", "quote": "JPY", "cot": "6J"},
+    "AUD/USD": {"symbol": "AUDUSD=X", "base": "AUD", "quote": "USD", "cot": "6A"},
+    "USD/CAD": {"symbol": "CAD=X", "base": "USD", "quote": "CAD", "cot": "6C"},
+    "USD/CHF": {"symbol": "CHF=X", "base": "USD", "quote": "CHF", "cot": "6S"},
+    "NZD/USD": {"symbol": "NZDUSD=X", "base": "NZD", "quote": "USD", "cot": "6N"},
+}
+LONG_SHORT_THRESHOLD = 20
+MAX_PRICE_AGE_DAYS = 4
+MIN_PRICE_OBSERVATIONS = 220
+
+
+def validate_price_history(df, max_age_days=MAX_PRICE_AGE_DAYS):
+    """Validate real provider-returned daily prices; never create replacement data."""
+    if df is None or df.empty or not {"date", "close"}.issubset(df.columns):
+        return False, "Kursreihe fehlt", None
+    d = df.copy()
+    d["date"] = pd.to_datetime(d["date"], utc=True, errors="coerce")
+    d["close"] = pd.to_numeric(d["close"], errors="coerce")
+    d = d.dropna(subset=["date", "close"]).sort_values("date")
+    if len(d) < MIN_PRICE_OBSERVATIONS:
+        return False, f"Zu wenig Historie ({len(d)}/{MIN_PRICE_OBSERVATIONS} Tageswerte)", None
+    if (d["close"] <= 0).any() or d["date"].duplicated().any():
+        return False, "Ungültige Kurse oder doppelte Zeitstempel", None
+    age = (pd.Timestamp.now(tz="UTC") - d["date"].iloc[-1]).total_seconds() / 86400
+    if age > max_age_days:
+        return False, f"Kursdaten veraltet ({age:.1f} Tage)", None
+    return True, f"Validiert · {len(d)} Tageswerte · letzter Kurs {d['date'].iloc[-1].date()}", d
+
+
+def technical_confirmation(prices):
+    """Daily trend/momentum confirmation, returned only for validated prices."""
+    if prices is None or len(prices) < 220:
+        return None, "Technische Historie unzureichend"
+    close = prices["close"].astype(float)
+    last = float(close.iloc[-1])
+    sma50 = float(close.rolling(50).mean().iloc[-1])
+    sma200 = float(close.rolling(200).mean().iloc[-1])
+    momentum20 = float(close.pct_change(20).iloc[-1])
+    if not np.isfinite([last, sma50, sma200, momentum20]).all():
+        return None, "Technische Kennzahlen ungültig"
+    if last > sma50 and sma50 > sma200 and momentum20 > 0:
+        return 1, f"Bullish bestätigt: Kurs>SMA50>SMA200, 20T-Momentum {momentum20:.2%}"
+    if last < sma50 and sma50 < sma200 and momentum20 < 0:
+        return -1, f"Bearish bestätigt: Kurs<SMA50<SMA200, 20T-Momentum {momentum20:.2%}"
+    return 0, f"Kein eindeutiger Trend: 20T-Momentum {momentum20:.2%}"
+
+
+def combine_fx_signal(component_scores, component_valid, technical_score):
+    """Score weights: macro 40, COT 25, seasonality 10. Technical confirms/blocks."""
+    required = ("macro", "cot", "seasonality")
+    missing = [name for name in required if not component_valid.get(name, False)]
+    if missing or technical_score is None:
+        return {"bias": "NEUTRAL", "score": None, "reason": "Unzureichende validierte Daten: " + ", ".join(missing + (["Technik"] if technical_score is None else [])), "signal_quality": "NICHT BEWERTBAR"}
+    score = round((0.40 * component_scores["macro"] + 0.25 * component_scores["cot"] + 0.10 * component_scores["seasonality"]) / 0.75)
+    # Technical analysis confirms or blocks; it does not add to the directional score.
+    if score >= LONG_SHORT_THRESHOLD:
+        bias = "LONG" if technical_score == 1 else "NEUTRAL"
+        reason = "Technik bestätigt LONG" if technical_score == 1 else "LONG blockiert: Technik bestätigt nicht bullish"
+    elif score <= -LONG_SHORT_THRESHOLD:
+        bias = "SHORT" if technical_score == -1 else "NEUTRAL"
+        reason = "Technik bestätigt SHORT" if technical_score == -1 else "SHORT blockiert: Technik bestätigt nicht bearish"
+    else:
+        bias, reason = "NEUTRAL", "Score innerhalb der Schwelle ±20"
+    return {"bias": bias, "score": score, "reason": reason, "signal_quality": "MITTEL" if bias != "NEUTRAL" else "NIEDRIG"}
+
+
+def quality_percent(valid_flags):
+    if not valid_flags:
+        return 0
+    return round(100 * sum(bool(x) for x in valid_flags) / len(valid_flags))
+
 st.title("⌁ MACRO / REGIME TERMINAL")
-st.caption("G10 FX · Makro · COT · Saisonalität · NQ / ES · Quant — Starter-Projekt")
+st.caption("Forex only · Makro · COT · Saisonalität · technische Bestätigung")
 st.warning("Datenstatus: Ohne konfigurierte Datenquelle werden keine aktuellen Marktmeinungen behauptet. Historische Daten sind nicht automatisch Echtzeitdaten; Anbieter, Verzögerung und Lizenzbedingungen beachten.")
 
 with st.sidebar:
     st.header("Einstellungen")
- page = st.radio("Modul", ["Übersicht", "FX Signal", "FX Macro", "Makroanalyse & G10", "Saisonalität", "COT / Positioning", "NQ & ES", "Quant & Regression", "Datenquellen"])
+    page = st.radio("Modul", ["Übersicht", "FX Signal", "Saisonalität", "COT / Positioning", "NQ & ES", "Quant & Regression", "Datenquellen"])
     st.divider()
     try:
         saved_fred_key = st.secrets.get("FRED_API_KEY", "")
@@ -102,7 +177,7 @@ with st.sidebar:
         help="Hier eingeben oder sicher in Streamlit Secrets als FRED_API_KEY hinterlegen."
     )
     st.caption(f"Ansicht erstellt: {utc_now()}")
-    st.caption("Build: Starter v1.0 · Daten müssen geprüft werden.")
+    st.caption("Build: FX Signal Engine v1.1 · Bias nur aus validierten Daten")
 
 # Demo values are intentionally labeled and are not market data.
 demo_strength = pd.DataFrame({
@@ -120,15 +195,58 @@ if page == "Übersicht":
     k4.metric("Datenqualität", "OHNE FEED")
     st.info("Hier werden keine Demo-Scores als aktuelle Marktmeinung dargestellt. Verbinde unten Datenquellen, bevor du Signale nutzt.")
     st.markdown("#### Gewünschte Module")
-    st.write("G10-Währungsstärke · Rates/Inflation/Arbeitsmarkt/Bonds · COT · Monats-Saisonalität · NQ/ES · Regression · Risiko-Regime · Bull-/Bear-Szenarien")
+    st.write("Forex-Paare · relatives Makro beider Währungsräume · COT-Futures-Positionierung · Monats-Saisonalität · technische Bestätigung · Daten- und Signalqualität")
     st.markdown("#### Start-Checkliste")
     st.write("- [ ] FRED API-Key für Makro- und Zinsserien hinterlegen")
-    st.write("- [ ] Historische Preise für FX, NQ und ES abrufen und Datenqualität prüfen")
+    st.write("- [ ] Historische Forex-Preise abrufen und Aktualität/Vollständigkeit prüfen")
     st.write("- [ ] CFTC-Kontrakte/Kategorien korrekt zuordnen")
     st.write("- [ ] Regeln und Schwellenwerte testen, bevor Signale produktiv genutzt werden")
 
-elif page == "FX Macro":
-    st.subheader("G10 Currency Macro")
+elif page in ("FX Signal", "FX Macro"):
+    st.subheader("Forex Bias Engine")
+    st.caption("LONG/SHORT erst ab ±20 und nur, wenn Makro, COT, Saisonalität sowie technische Bestätigung validiert sind. Nicht verbundene Faktoren erzwingen NEUTRAL.")
+    pair = st.selectbox("Forex-Paar", list(FX_PAIRS.keys()))
+    pair_info = FX_PAIRS[pair]
+    st.markdown("#### Datenvalidierung & Bias")
+    if st.button("Echte Kursdaten laden und validieren", type="primary"):
+        try:
+            price_df = load_market_history(pair_info["symbol"], "2y")
+            price_ok, price_message, validated_prices = validate_price_history(price_df)
+            tech_score, tech_message = technical_confirmation(validated_prices) if price_ok else (None, "Technik blockiert: Kursdaten nicht validiert")
+            # The current starter project does not yet contain validated, pair-relative macro
+            # datasets or a verified CFTC contract/position mapping. Never infer these from a USD-only feed.
+            component_valid = {"macro": False, "cot": False, "seasonality": False}
+            component_scores = {}
+            result = combine_fx_signal(component_scores, component_valid, tech_score)
+            flags = [price_ok, component_valid["macro"], component_valid["cot"], component_valid["seasonality"], tech_score is not None]
+            q_data = quality_percent(flags)
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Bias", result["bias"])
+            c2.metric("Gesamtscore", "—" if result["score"] is None else f"{result['score']:+d} / 100")
+            c3.metric("Datenqualität", f"{q_data}%")
+            c4.metric("Signalqualität", result["signal_quality"])
+            st.info(result["reason"])
+            st.write("**Technische Prüfung:**", tech_message)
+            st.write("**Kursdaten:**", price_message)
+            quality_rows = [
+                {"Komponente": "FX-Kursdaten", "Status": "VALIDIERT" if price_ok else "UNGÜLTIG", "Einordnung": price_message},
+                {"Komponente": "Relatives Makro beider Währungen", "Status": "FEHLT", "Einordnung": "Derzeit nur US-FRED-Serien angebunden; kein valider Vergleich beider Währungsräume."},
+                {"Komponente": "COT", "Status": "FEHLT", "Einordnung": f"Kontrakt {pair_info['cot']} muss über Reporttyp, Contract und Positionsfelder verifiziert werden."},
+                {"Komponente": "Saisonalität", "Status": "FEHLT", "Einordnung": "Historische Preise sind abrufbar, aber saisonale Stichprobe/Abdeckung wird noch nicht als validierter Signalinput freigegeben."},
+                {"Komponente": "Technische Bestätigung", "Status": "VALIDIERT" if tech_score is not None else "FEHLT", "Einordnung": tech_message},
+            ]
+            st.dataframe(pd.DataFrame(quality_rows), use_container_width=True, hide_index=True)
+            if price_ok:
+                st.line_chart(validated_prices.set_index("date")["close"])
+            st.warning("Fail-closed aktiv: Der Bias bleibt NEUTRAL, bis alle drei nichttechnischen Komponenten aus echten, korrekt zugeordneten und frischen Daten validiert sind. Eine vorhandene USD-FRED-Serie reicht für EUR/USD oder andere Paare nicht aus.")
+        except Exception as exc:
+            st.error(f"Kursabruf/Validierung fehlgeschlagen: {exc}")
+            st.metric("Bias", "NEUTRAL")
+            st.metric("Datenqualität", "0% / nicht validiert")
+    else:
+        st.info("Noch keine aktuelle Kursprüfung durchgeführt. Ohne erfolgreichen Datenabruf bleibt der Bias NEUTRAL.")
+    st.divider()
+    st.subheader("Makro-Datenlabor (USD, nicht allein signalberechtigt)")
     st.caption("Lädt verfügbare US-Makroserien aus FRED. Das ist noch kein vollständiger G10-Vergleich; andere Länder benötigen eigene Datenzuordnungen.")
     fred_series = {
         "FEDFUNDS": ("US Effective Federal Funds Rate", "% p.a."),
@@ -178,72 +296,7 @@ elif page == "FX Macro":
             if errors:
                 st.warning("Einige Serien konnten nicht geladen werden: " + " | ".join(errors))
 
-            # Heuristic USD macro bias based only on selected, successfully loaded FRED series.
-            # This is a transparent educational proxy, not a forecast or trading signal.
-            if summary:
-                st.markdown("### USD-Makro-Bias")
-                st.caption("Heuristische Auswertung der geladenen Daten. Ohne Markterwartungen/Surprise-Daten ist dies kein verlässliches Handelssignal.")
-                factor_rows = []
-                weighted_points, available_weight = 0.0, 0.0
-
-                def _change(series_id, periods):
-                    data = loaded_series.get(series_id, pd.DataFrame())
-                    if data.empty or len(data) <= periods:
-                        return None
-                    return float(data.iloc[-1]["value"] - data.iloc[-1-periods]["value"])
-
-                # Rate/yield rises can support USD through yield differentials, but are ambiguous.
-                rules = {
-                    "FEDFUNDS": (20, 3, "Leitzins-Veränderung"),
-                    "DGS10": (15, 20, "10Y-Rendite-Veränderung"),
-                    "DGS2": (20, 20, "2Y-Rendite-Veränderung"),
-                    "UNRATE": (20, 3, "Arbeitslosenquote-Veränderung"),
-                }
-                for sid, (weight, periods, label) in rules.items():
-                    if sid not in loaded_series:
-                        continue
-                    delta = _change(sid, periods)
-                    if delta is None:
-                        continue
-                    # Signs are deliberately conservative; yields/rates are only weak directional proxies.
-                    if sid == "UNRATE":
-                        points = -1 if delta >= 0.2 else (1 if delta <= -0.2 else 0)
-                        interpretation = "steigende Arbeitslosigkeit" if points < 0 else ("sinkende Arbeitslosigkeit" if points > 0 else "weitgehend stabil")
-                    else:
-                        threshold = 0.10 if sid != "FEDFUNDS" else 0.10
-                        points = 1 if delta > threshold else (-1 if delta < -threshold else 0)
-                        interpretation = "gestiegen" if points > 0 else ("gefallen" if points < 0 else "weitgehend stabil")
-                    weighted_points += points * weight
-                    available_weight += weight
-                    factor_rows.append({"Faktor": label, "Veränderung": round(delta, 3), "Richtung (heuristisch)": "USD-stützend" if points > 0 else ("USD-belastend" if points < 0 else "Neutral"), "Hinweis": interpretation, "Gewicht": weight})
-
-                # CPI index itself is not inflation; use 12-observation change when available.
-                if "CPIAUCSL" in loaded_series:
-                    cpi = loaded_series["CPIAUCSL"]
-                    if len(cpi) > 12:
-                        yoy = (float(cpi.iloc[-1]["value"]) / float(cpi.iloc[-13]["value"]) - 1) * 100
-                        prior_yoy = (float(cpi.iloc[-2]["value"]) / float(cpi.iloc[-14]["value"]) - 1) * 100 if len(cpi) > 13 else yoy
-                        delta_yoy = yoy - prior_yoy
-                        # Falling inflation can reduce pressure for restrictive policy; sign remains ambiguous.
-                        points = 1 if delta_yoy > 0.15 else (-1 if delta_yoy < -0.15 else 0)
-                        weighted_points += points * 25
-                        available_weight += 25
-                        factor_rows.append({"Faktor": "CPI-Inflation (YoY, aus CPI-Index berechnet)", "Veränderung": round(delta_yoy, 3), "Richtung (heuristisch)": "potenziell USD-stützend" if points > 0 else ("potenziell USD-belastend" if points < 0 else "Neutral"), "Hinweis": f"Inflation ca. {yoy:.2f}% YoY; Kontext/Fed-Reaktion entscheidend", "Gewicht": 25})
-                    else:
-                        st.info("CPI-Bewertung übersprungen: Für eine Jahresrate werden mindestens 13 Monatswerte benötigt.")
-
-                score = round(100 * weighted_points / available_weight) if available_weight else 0
-                bias = "BULLISH" if score >= 25 else ("BEARISH" if score <= -25 else "NEUTRAL")
-                confidence = "NIEDRIG" if len(factor_rows) < 3 else "BEGRENZT"
-                m1, m2, m3 = st.columns(3)
-                m1.metric("USD-Makro-Bias", bias)
-                m2.metric("Heuristischer Score", f"{score:+d} / 100")
-                m3.metric("Signalqualität", confidence)
-                if factor_rows:
-                    st.dataframe(pd.DataFrame(factor_rows), use_container_width=True, hide_index=True)
-                else:
-                    st.info("Für den Bias fehlen ausreichend historische Beobachtungen. Bitte mehr Indikatoren auswählen.")
-                st.caption("Interpretation: Score nahe 0 = neutral; ab +25 bullish USD, ab −25 bearish USD. Dies bewertet nur einfache Datenveränderungen, nicht Erwartungen, Überraschungen oder die Gegenwährung. Nicht als alleinige Handelsgrundlage verwenden.")
+            st.info("Die geladenen US-Makroserien dienen derzeit nur der Dateninspektion. Sie erzeugen keinen Forex-Bias, da ein validierter Vergleich mit dem Gegenwährungsraum und Konsistenzchecks fehlen.")
     st.markdown("#### Status der G10-Abdeckung")
     coverage = pd.DataFrame([
         ["USD", "Teilweise verbunden", "US-Makroindikatoren oben über FRED ladbar"],
@@ -257,48 +310,9 @@ elif page == "FX Macro":
     ], columns=["CCY", "Status", "Hinweis"])
     st.dataframe(coverage, use_container_width=True, hide_index=True)
 
-
-elif page == "Makroanalyse & G10":
-    st.subheader("Makroanalyse & G10-Währungsranking")
-    st.caption("Vergleich von Zentralbankpolitik, Inflation, Arbeitsmarkt und Wachstum. Es werden nur Währungen gerankt, für die tatsächlich vergleichbare Daten vorliegen.")
-    st.info("Aktuell ist in dieser App nur der US-Makrofeed über FRED angebunden. Die übrigen G10-Währungen werden bewusst nicht mit erfundenen oder pauschalen Scores bewertet.")
-
-    currencies = [
-        ("USD", "USA", "FRED: US-Zinsen, CPI, Arbeitslosenquote"),
-        ("EUR", "Eurozone", "EZB / Eurostat: Leitzinsen, HICP, Arbeitsmarkt"),
-        ("GBP", "Vereinigtes Königreich", "BoE / ONS: Bank Rate, CPI, Arbeitsmarkt"),
-        ("JPY", "Japan", "BoJ / Statistics Japan: Policy Rate, CPI, Arbeitsmarkt"),
-        ("CHF", "Schweiz", "SNB / BFS: SNB-Rate, CPI, Arbeitsmarkt"),
-        ("CAD", "Kanada", "Bank of Canada / Statistics Canada"),
-        ("AUD", "Australien", "RBA / Australian Bureau of Statistics"),
-        ("NZD", "Neuseeland", "RBNZ / Stats NZ"),
-        ("NOK", "Norwegen", "Norges Bank / Statistics Norway"),
-        ("SEK", "Schweden", "Riksbank / Statistics Sweden"),
-    ]
-    coverage_rows = []
-    for ccy, country, source in currencies:
-        status = "Teilweise verbunden" if ccy == "USD" else "Noch nicht verbunden"
-        coverage_rows.append({"Währung": ccy, "Land/Region": country, "Datenstatus": status, "Benötigte Quelle": source})
-    st.markdown("#### Datenabdeckung")
-    st.dataframe(pd.DataFrame(coverage_rows), use_container_width=True, hide_index=True)
-
-    st.markdown("#### Wie das Ranking berechnet werden soll")
-    st.write("1. **Zentralbankpolitik:** aktueller Leitzins und Veränderung der erwarteten Zinspolitik.")
-    st.write("2. **Inflation:** aktuelle Jahresrate, Trend und Abweichung vom Zentralbankziel.")
-    st.write("3. **Arbeitsmarkt und Wachstum:** Veränderung von Arbeitslosigkeit, Beschäftigung und Aktivitätsindikatoren.")
-    st.write("4. **Relative Bewertung:** Währungen werden paarweise verglichen; für EUR/USD zählt die Differenz zwischen EUR- und USD-Bild, nicht der USD-Score allein.")
-    st.write("5. **Datenqualität:** Frequenz, Aktualität, fehlende Werte und Quellen werden angezeigt. Unvergleichbare oder fehlende Daten reduzieren die Konfidenz.")
-
-    st.warning("Ein vollständiges Ranking ist erst möglich, wenn die Länderreihen eingebunden und auf vergleichbare Definitionen/Frequenzen geprüft sind. Der vorhandene USD-Score ist eine einfache Heuristik und kein verlässliches Handelssignal.")
-    st.markdown("#### Nächster technischer Schritt")
-    st.write("Die nächste Erweiterung muss offizielle Reihen für EUR, GBP, JPY, CHF, CAD, AUD, NZD, NOK und SEK anbinden, die Daten auf gemeinsame Zeiträume ausrichten und erst dann ein relatives Ranking berechnen. API-Schlüssel gehören in Streamlit Secrets, nicht in GitHub.")
-
 elif page == "Saisonalität":
     st.subheader("Monatliche Saisonalität")
-    symbols = {
-        "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "JPY=X",
-        "AUD/USD": "AUDUSD=X", "NQ (Nasdaq-100 proxy)": "NQ=F", "ES (S&P 500 proxy)": "ES=F"
-    }
+    symbols = {name: info["symbol"] for name, info in FX_PAIRS.items()}
     label = st.selectbox("Instrument / Proxy", list(symbols))
     years = st.selectbox("Historie", ["5y", "10y", "max"], index=1)
     if st.button("Historische Daten laden und berechnen"):
@@ -395,7 +409,7 @@ else:
         ["Zentralbankpfade", "Fed, EZB, BoE, BoJ, SNB, BoC, RBA, RBNZ", "Offizielle Veröffentlichungen; Parsing/Mapping erforderlich"],
         ["COT", "CFTC Public Reporting", "Wöchentlich; Reporttyp und Contract mapping validieren"],
         ["Historische Preise", "yfinance Wrapper / Yahoo Finance", "Nicht garantiert offiziell, vollständig, lizenziert oder echtzeitfähig"],
-        ["NQ / ES live", "Broker oder lizenzierter Marktdatenanbieter", "API/Account und Lizenzbedingungen abhängig vom Anbieter"],
+        ["FX-Kurse", "FX-Datenanbieter / Broker", "Aktualität, Historie und Lizenzbedingungen validieren"],
         ["Konsensdaten", "Separater Makro-Kalender-Anbieter", "Meist separat/lizenziert"]
     ], columns=["Bereich", "Quelle", "Hinweis"])
     st.dataframe(sources, use_container_width=True, hide_index=True)
@@ -409,4 +423,4 @@ else:
     st.caption("Die Beispielabfrage akzeptiert den Schlüssel im Sidebar-Feld. Für dauerhaftes Hosting besser st.secrets verwenden und das Secret nicht ins GitHub-Repository hochladen.")
 
 st.divider()
-st.caption("Macro / Regime Terminal — Starterprojekt. Keine Anlageberatung. Vor Live-Einsatz Datenlizenzen, Methodik, Kontraktrollen, Zeitstempel und Signale validieren.")
+st.caption("Macro / Regime Terminal — Forex-only Signal Engine. NEUTRAL bei unzureichenden oder nicht validierten Daten. Keine Anlageberatung.")
