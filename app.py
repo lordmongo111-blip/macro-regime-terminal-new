@@ -142,7 +142,8 @@ def combine_fx_signal(component_scores, component_valid, technical_score):
     missing = [name for name in required if not component_valid.get(name, False)]
     if missing or technical_score is None:
         return {"bias": "NEUTRAL", "score": None, "reason": "Unzureichende validierte Daten: " + ", ".join(missing + (["Technik"] if technical_score is None else [])), "signal_quality": "NICHT BEWERTBAR"}
-    score = round((0.40 * component_scores["macro"] + 0.25 * component_scores["cot"] + 0.10 * component_scores["seasonality"]) / 0.75)
+    # Weighted average normalized by the sum of available component weights.
+    score = round(0.40 * component_scores["macro"] + 0.25 * component_scores["cot"] + 0.10 * component_scores["seasonality"])
     # Technical analysis confirms or blocks; it does not add to the directional score.
     if score >= LONG_SHORT_THRESHOLD:
         bias = "LONG" if technical_score == 1 else "NEUTRAL"
@@ -159,17 +160,24 @@ def calculate_eurusd_macro_score(api_key):
     """Relative US-vs-euro-area macro score from official FRED-hosted series.
     Returns None if inputs are missing/stale; this is a transparent heuristic, not a forecast.
     """
-    required = {"FEDFUNDS": 45, "ECBDFR": 45, "CPIAUCSL": 75, "CP0000EZCCM086NEST": 75}
+    # FRED series publish at different frequencies. Freshness must reflect the
+    # release cadence, not apply one daily-market rule to monthly observations.
+    # Monthly policy rates/CPI/HICP: allow up to 100 days; ECB rate up to 75 days.
+    required = {"FEDFUNDS": 100, "ECBDFR": 75, "CPIAUCSL": 100, "CP0000EZCCM086NEST": 100}
     series = {}
+    now = pd.Timestamp.now().normalize()
     for sid, max_age in required.items():
         df = get_fred_series(sid, api_key)
         if df.empty or len(df) < 13:
             return None, f"{sid}: zu wenige Beobachtungen"
-        last_date = pd.Timestamp(df.iloc[-1]["date"])
-        age = (pd.Timestamp.now().normalize() - last_date.normalize()).days
+        df = df.sort_values("date").reset_index(drop=True)
+        last_date = pd.Timestamp(df.iloc[-1]["date"]).tz_localize(None).normalize()
+        age = (now - last_date).days
+        if age < 0:
+            return None, f"{sid}: letzter Beobachtungszeitpunkt liegt in der Zukunft ({last_date.date()})"
         if age > max_age:
-            return None, f"{sid}: letzter Wert {last_date.date()} ist zu alt ({age} Tage)"
-        series[sid] = df.sort_values("date").reset_index(drop=True)
+            return None, f"{sid}: letzter Wert {last_date.date()} ist zu alt ({age} Tage; Grenzwert {max_age})"
+        series[sid] = df
 
     us_rate = float(series["FEDFUNDS"].iloc[-1]["value"])
     eu_rate = float(series["ECBDFR"].iloc[-1]["value"])
@@ -248,7 +256,7 @@ if page == "Übersicht":
 
 elif page in ("FX Signal", "FX Macro"):
     st.subheader("Forex Bias Engine")
-    st.caption("LONG/SHORT erst ab ±20 und nur, wenn Makro, COT, Saisonalität sowie technische Bestätigung validiert sind. Nicht verbundene Faktoren erzwingen NEUTRAL.")
+    st.caption("LONG/SHORT erst ab ±20 und nur, wenn Makro, COT, Saisonalität sowie technische Bestätigung validiert sind. Monatliche Makrodaten werden nach ihrer Veröffentlichungsfrequenz geprüft. Nicht verbundene Faktoren erzwingen NEUTRAL.")
     pair = st.selectbox("Forex-Paar", list(FX_PAIRS.keys()))
     pair_info = FX_PAIRS[pair]
     st.markdown("#### Datenvalidierung & Bias")
