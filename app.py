@@ -155,6 +155,50 @@ def combine_fx_signal(component_scores, component_valid, technical_score):
     return {"bias": bias, "score": score, "reason": reason, "signal_quality": "MITTEL" if bias != "NEUTRAL" else "NIEDRIG"}
 
 
+def calculate_eurusd_macro_score(api_key):
+    """Relative US-vs-euro-area macro score from official FRED-hosted series.
+    Returns None if inputs are missing/stale; this is a transparent heuristic, not a forecast.
+    """
+    required = {"FEDFUNDS": 45, "ECBDFR": 45, "CPIAUCSL": 75, "CP0000EZCCM086NEST": 75}
+    series = {}
+    for sid, max_age in required.items():
+        df = get_fred_series(sid, api_key)
+        if df.empty or len(df) < 13:
+            return None, f"{sid}: zu wenige Beobachtungen"
+        last_date = pd.Timestamp(df.iloc[-1]["date"])
+        age = (pd.Timestamp.now().normalize() - last_date.normalize()).days
+        if age > max_age:
+            return None, f"{sid}: letzter Wert {last_date.date()} ist zu alt ({age} Tage)"
+        series[sid] = df.sort_values("date").reset_index(drop=True)
+
+    us_rate = float(series["FEDFUNDS"].iloc[-1]["value"])
+    eu_rate = float(series["ECBDFR"].iloc[-1]["value"])
+    # CPI/HICP year-over-year: use the observation closest to 12 months earlier.
+    def yoy(df):
+        d = df.copy().sort_values("date")
+        last = d.iloc[-1]
+        target = last["date"] - pd.DateOffset(years=1)
+        prior = d[d["date"] <= target]
+        if prior.empty or float(prior.iloc[-1]["value"]) == 0:
+            raise ValueError("Kein passender Vorjahreswert für Inflationsvergleich")
+        return (float(last["value"]) / float(prior.iloc[-1]["value"]) - 1) * 100
+    us_infl = yoy(series["CPIAUCSL"])
+    eu_infl = yoy(series["CP0000EZCCM086NEST"])
+    rate_diff = us_rate - eu_rate
+    inflation_diff = us_infl - eu_infl
+    # Map transparent differences to bounded sub-scores.
+    rate_component = float(np.clip(rate_diff / 2.0 * 100, -100, 100))
+    inflation_component = float(np.clip(-inflation_diff / 2.0 * 100, -100, 100))
+    # Positive score favors USD, therefore negative score favors EUR/USD (base EUR).
+    usd_macro_score = round(0.65 * rate_component + 0.35 * inflation_component)
+    eurusd_macro_score = -usd_macro_score
+    details = (f"US-Leitzins {us_rate:.2f}% vs. EZB {eu_rate:.2f}% (Differenz {rate_diff:+.2f} pp); "
+               f"US-CPI YoY {us_infl:.2f}% vs. Eurozonen-HICP YoY {eu_infl:.2f}% "
+               f"(Differenz {inflation_diff:+.2f} pp).")
+    return {"score": int(eurusd_macro_score), "rate_diff": rate_diff,
+            "us_inflation_yoy": us_infl, "eu_inflation_yoy": eu_infl,
+            "details": details}, None
+
 def quality_percent(valid_flags):
     if not valid_flags:
         return 0
@@ -213,10 +257,19 @@ elif page in ("FX Signal", "FX Macro"):
             price_df = load_market_history(pair_info["symbol"], "2y")
             price_ok, price_message, validated_prices = validate_price_history(price_df)
             tech_score, tech_message = technical_confirmation(validated_prices) if price_ok else (None, "Technik blockiert: Kursdaten nicht validiert")
-            # The current starter project does not yet contain validated, pair-relative macro
-            # datasets or a verified CFTC contract/position mapping. Never infer these from a USD-only feed.
             component_valid = {"macro": False, "cot": False, "seasonality": False}
             component_scores = {}
+            macro_result, macro_error = (None, "FRED API-Key fehlt")
+            if fred_key and pair == "EUR/USD":
+                try:
+                    macro_result, macro_error = calculate_eurusd_macro_score(fred_key)
+                    if macro_result is not None:
+                        component_valid["macro"] = True
+                        component_scores["macro"] = macro_result["score"]
+                except Exception as macro_exc:
+                    macro_error = str(macro_exc)
+            # COT and seasonality remain invalid until their real inputs are verified.
+            # Do not issue a directional trade bias while required components are missing.
             result = combine_fx_signal(component_scores, component_valid, tech_score)
             flags = [price_ok, component_valid["macro"], component_valid["cot"], component_valid["seasonality"], tech_score is not None]
             q_data = quality_percent(flags)
@@ -228,9 +281,19 @@ elif page in ("FX Signal", "FX Macro"):
             st.info(result["reason"])
             st.write("**Technische Prüfung:**", tech_message)
             st.write("**Kursdaten:**", price_message)
+            if pair == "EUR/USD":
+                st.markdown("#### Relativer Makro-Score (EUR gegenüber USD)")
+                if macro_result is not None:
+                    st.metric("Makro-Score EUR/USD", f"{macro_result['score']:+d} / 100")
+                    st.caption(macro_result["details"])
+                    st.caption("Heuristik: Zinsdifferenz 65%, Inflationsdifferenz 35%. Ein positiver Wert begünstigt EUR/USD; kein alleiniger Trade-Trigger.")
+                else:
+                    st.warning("Makro-Score nicht verfügbar: " + str(macro_error) + ". Prüfe FRED-Key und Serienverfügbarkeit.")
+            else:
+                st.info("Relativer Makro-Score ist aktuell nur für EUR/USD implementiert; für dieses Paar wird kein Makro-Score erfunden.")
             quality_rows = [
                 {"Komponente": "FX-Kursdaten", "Status": "VALIDIERT" if price_ok else "UNGÜLTIG", "Einordnung": price_message},
-                {"Komponente": "Relatives Makro beider Währungen", "Status": "FEHLT", "Einordnung": "Derzeit nur US-FRED-Serien angebunden; kein valider Vergleich beider Währungsräume."},
+                {"Komponente": "Relatives Makro beider Währungen", "Status": "VALIDIERT" if component_valid["macro"] else "FEHLT", "Einordnung": macro_result["details"] if macro_result is not None else str(macro_error)},
                 {"Komponente": "COT", "Status": "FEHLT", "Einordnung": f"Kontrakt {pair_info['cot']} muss über Reporttyp, Contract und Positionsfelder verifiziert werden."},
                 {"Komponente": "Saisonalität", "Status": "FEHLT", "Einordnung": "Historische Preise sind abrufbar, aber saisonale Stichprobe/Abdeckung wird noch nicht als validierter Signalinput freigegeben."},
                 {"Komponente": "Technische Bestätigung", "Status": "VALIDIERT" if tech_score is not None else "FEHLT", "Einordnung": tech_message},
@@ -238,7 +301,7 @@ elif page in ("FX Signal", "FX Macro"):
             st.dataframe(pd.DataFrame(quality_rows), use_container_width=True, hide_index=True)
             if price_ok:
                 st.line_chart(validated_prices.set_index("date")["close"])
-            st.warning("Fail-closed aktiv: Der Bias bleibt NEUTRAL, bis alle drei nichttechnischen Komponenten aus echten, korrekt zugeordneten und frischen Daten validiert sind. Eine vorhandene USD-FRED-Serie reicht für EUR/USD oder andere Paare nicht aus.")
+            st.warning("Fail-closed aktiv: Der finale Bias bleibt NEUTRAL, bis Makro, COT und Saisonalität aus echten, korrekt zugeordneten und frischen Daten validiert sind. Der Makro-Score allein ist noch kein Gesamt- oder Handelssignal.")
         except Exception as exc:
             st.error(f"Kursabruf/Validierung fehlgeschlagen: {exc}")
             st.metric("Bias", "NEUTRAL")
@@ -260,10 +323,9 @@ elif page in ("FX Signal", "FX Macro"):
         "CP0000EZCCM086NEST": ("Eurozone HICP (harmonisierter Verbraucherpreisindex)", "Index 2025=100"),
     }
     if not fred_key:
-        st.info("Trage links deinen FRED API-Key ein. Danach kannst du die US-Makroindikatoren laden.")
-    default_series = ["FEDFUNDS", "CPIAUCSL", "UNRATE", "DGS10", "DGS2", "ECBDFR", "CP0000EZCCM086NEST"]
-    selected = st.multiselect("Indikatoren", list(fred_series.keys()), default=default_series, format_func=lambda sid: f"{sid} — {fred_series[sid][0]}")
-    if st.button("US-Makroindikatoren laden", type="primary"):
+        st.info("Trage links deinen FRED API-Key ein. Danach kannst du die Makroindikatoren laden.")
+    selected = st.multiselect("Indikatoren", list(fred_series.keys()), default=["FEDFUNDS", "CPIAUCSL", "UNRATE", "DGS10", "DGS2", "ECBDFR", "CP0000EZCCM086NEST"], format_func=lambda sid: f"{sid} — {fred_series[sid][0]}")
+    if st.button("Makroindikatoren laden", type="primary"):
         if not fred_key:
             st.error("Bitte zuerst links einen FRED API-Key eintragen.")
         elif not selected:
@@ -300,14 +362,10 @@ elif page in ("FX Signal", "FX Macro"):
                 st.warning("Einige Serien konnten nicht geladen werden: " + " | ".join(errors))
 
             st.info("Die geladenen US-Makroserien dienen derzeit nur der Dateninspektion. Sie erzeugen keinen Forex-Bias, da ein validierter Vergleich mit dem Gegenwährungsraum und Konsistenzchecks fehlen.")
-    st.markdown("#### Relativer Makro-Check: USD gegenüber EUR")
-    st.caption("Die folgenden Reihen können oben gemeinsam geladen und verglichen werden. Der Vergleich ist eine Datenprüfung, noch kein validierter Handelsscore.")
-    st.info("Für den Zinsvergleich FEDFUNDS und ECBDFR verwenden. Für Inflation müssen die US-CPI- und Eurozone-HICP-Indexreihen erst als prozentuale Veränderung gegenüber dem Vorjahresmonat berechnet werden; Indexstände selbst sind nicht direkt vergleichbar.")
-
     st.markdown("#### Status der G10-Abdeckung")
     coverage = pd.DataFrame([
         ["USD", "Teilweise verbunden", "US-Makroindikatoren oben über FRED ladbar"],
-        ["EUR", "Teilweise verbunden", "EZB-Einlagefazilität (ECBDFR) und Eurozone-HICP können oben über FRED geladen werden; weitere Reihen fehlen"],
+        ["EUR", "Teilweise verbunden", "EZB-Einlagezins und Eurozonen-HICP via FRED; weitere Reihen fehlen"],
         ["GBP", "Nicht verbunden", "BoE-/ONS-Serien separat integrieren"],
         ["JPY", "Nicht verbunden", "BoJ-/Japan-Statistikserien separat integrieren"],
         ["CHF", "Nicht verbunden", "SNB-/Schweizer Statistikserien separat integrieren"],
