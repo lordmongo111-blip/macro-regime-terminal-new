@@ -435,6 +435,70 @@ elif page in ("FX Signal", "FX Macro"):
             c3.metric("Datenqualität", f"{q_data}%")
             c4.metric("Signalqualität", result["signal_quality"])
             st.info(result["reason"])
+
+            # Explainable signal breakdown: show what each component contributes,
+            # in pair-direction terms, and why the final bias was selected/blocked.
+            st.markdown("#### Warum ist dieses Währungspaar bullish oder bearish?")
+            weights = {"macro": 0.40, "cot": 0.25, "seasonality": 0.10, "technical": 0.25}
+            component_labels = {
+                "macro": "Relatives Makro",
+                "cot": "COT / Positionierung",
+                "seasonality": "Saisonalität",
+                "technical": "Technik / Trend"
+            }
+            explain_rows = []
+            for key in ("macro", "cot", "seasonality"):
+                label = component_labels[key]
+                if component_valid.get(key, False) and key in component_scores:
+                    value = float(component_scores[key])
+                    contribution = value * weights[key]
+                    direction_text = "bullish für " + pair if value > 0 else ("bearish für " + pair if value < 0 else "neutral")
+                    explain_rows.append({
+                        "Faktor": label,
+                        "Score": f"{value:+.0f} / 100",
+                        "Gewicht": f"{weights[key]*100:.0f}%",
+                        "Beitrag zum Gesamtscore": f"{contribution:+.1f}",
+                        "Interpretation": f"{direction_text}; " + (
+                            f"stützt das Signal mit {contribution:+.1f} Punkten." if contribution != 0 else "liefert aktuell keinen Richtungsbeitrag."
+                        )
+                    })
+                else:
+                    missing_reason = {"macro": macro_error, "cot": cot_error, "seasonality": season_error}.get(key, "nicht verfügbar")
+                    explain_rows.append({
+                        "Faktor": label, "Score": "FEHLT", "Gewicht": f"{weights[key]*100:.0f}%",
+                        "Beitrag zum Gesamtscore": "nicht berechnet",
+                        "Interpretation": f"Nicht berücksichtigt/freigegeben: {missing_reason}"
+                    })
+            if tech_score is not None:
+                tech_value = 100 * float(tech_score)
+                tech_contribution = tech_value * weights["technical"]
+                tech_direction = "bullish für " + pair if tech_value > 0 else ("bearish für " + pair if tech_value < 0 else "neutral")
+                tech_interpretation = f"{tech_direction}; {tech_message}. Gewichteter Beitrag: {tech_contribution:+.1f} Punkte."
+            else:
+                tech_value, tech_contribution = None, None
+                tech_interpretation = f"Nicht validiert: {tech_message}"
+            explain_rows.append({
+                "Faktor": component_labels["technical"],
+                "Score": f"{tech_value:+.0f} / 100" if tech_value is not None else "FEHLT",
+                "Gewicht": f"{weights['technical']*100:.0f}%",
+                "Beitrag zum Gesamtscore": f"{tech_contribution:+.1f}" if tech_contribution is not None else "nicht berechnet",
+                "Interpretation": tech_interpretation
+            })
+            st.dataframe(pd.DataFrame(explain_rows), use_container_width=True, hide_index=True)
+            if result["score"] is not None:
+                st.markdown(f"**Gesamteinordnung:** Score **{result['score']:+d}/100**. "
+                            f"Die Regel verlangt einen Score ab +{LONG_SHORT_THRESHOLD} für LONG bzw. "
+                            f"≤ −{LONG_SHORT_THRESHOLD} für SHORT und eine passende technische Bestätigung.")
+            if result["bias"] == "SHORT":
+                st.warning("Warum SHORT? Der gewichtete Score liegt unter der Short-Schwelle und die technische Bestätigung ist bearish. "
+                           "Prüfe besonders, ob Makro- und COT-Scores korrekt auf die Basiswährung gegenüber der Kurswährung ausgerichtet sind.")
+            elif result["bias"] == "LONG":
+                st.success("Warum LONG? Der gewichtete Score liegt über der Long-Schwelle und die technische Bestätigung ist bullish. "
+                           "Prüfe, ob alle Teil-Scores dieselbe Paar-Richtung verwenden.")
+            else:
+                st.info("Warum NEUTRAL? Mindestens eine Pflichtkomponente kann fehlen, der Score kann innerhalb der Schwelle liegen "
+                        "oder die technische Bestätigung passt nicht zur Score-Richtung.")
+            st.caption("Gewichte: Makro 40 %, COT 25 %, Saisonalität 10 %, Technik 25 %. Beiträge sind gewichtete Teil-Scores, keine Erfolgswahrscheinlichkeiten.")
             st.write("**Technische Prüfung:**", tech_message)
             st.write("**Kursdaten:**", price_message)
             if pair == "EUR/USD":
