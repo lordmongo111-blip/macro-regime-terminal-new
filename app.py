@@ -175,9 +175,15 @@ def seasonality_component_score(prices, invert=False, min_years=5):
     d = d.dropna(subset=["date", "close"]).sort_values("date")
     monthly = d.set_index("date")["close"].resample("ME").last().dropna().pct_change().dropna().to_frame("return")
     current_month = pd.Timestamp.now().month
-    sample = monthly.loc[monthly.index.month == current_month, "return"]
+    sample = monthly.loc[monthly.index.month == current_month, "return"].dropna()
+    # Count distinct years, not raw rows; only one monthly return per year is valid.
+    sample = sample[~sample.index.year.duplicated(keep="last")]
     if len(sample) < min_years:
-        raise ValueError(f"Zu wenige Beobachtungen für diesen Monat ({len(sample)}/{min_years} Jahre)")
+        years_found = ", ".join(str(y) for y in sample.index.year.tolist()) or "keine"
+        raise ValueError(
+            f"Zu wenige historische Monatsbeobachtungen ({len(sample)}/{min_years} Jahre; vorhanden: {years_found}). "
+            "Für eine belastbare Saisonanalyse werden längere Kursdaten benötigt."
+        )
     mean_return = float(sample.mean())
     # Transparent scaling: +/-2% average monthly return maps to +/-100.
     score = int(round(np.clip(mean_return / 0.02 * 100, -100, 100)))
@@ -280,7 +286,9 @@ def calculate_eurusd_macro_score(api_key):
     """Relative US-vs-euro-area macro score from official FRED-hosted series.
     Returns None if inputs are missing/stale; this is a transparent heuristic, not a forecast.
     """
-    required = {"FEDFUNDS": 45, "ECBDFR": 45, "CPIAUCSL": 75, "CP0000EZCCM086NEST": 75}
+    # FEDFUNDS is a monthly average and can legitimately lag by several weeks.
+    # ECBDFR is a daily policy-rate series; CPI/HICP are monthly releases.
+    required = {"FEDFUNDS": 75, "ECBDFR": 45, "CPIAUCSL": 75, "CP0000EZCCM086NEST": 75}
     series = {}
     for sid, max_age in required.items():
         df = get_fred_series(sid, api_key)
@@ -375,7 +383,7 @@ elif page in ("FX Signal", "FX Macro"):
     st.markdown("#### Datenvalidierung & Bias")
     if st.button("Echte Kursdaten laden und validieren", type="primary"):
         try:
-            price_df = load_market_history(pair_info["symbol"], "2y")
+            price_df = load_market_history(pair_info["symbol"], "10y")
             price_ok, price_message, validated_prices = validate_price_history(price_df)
             tech_score, tech_message = technical_confirmation(validated_prices) if price_ok else (None, "Technik blockiert: Kursdaten nicht validiert")
             component_valid = {"macro": False, "cot": False, "seasonality": False}
