@@ -75,82 +75,126 @@ def seasonality(df):
         volatility="std"
     ).reset_index()
 
-def load_cot_legacy_fx():
-    """Load official CFTC Legacy Futures Only positioning for Euro FX and USD Index."""
+def cot_api_preview():
+    """Official CFTC Socrata API query: latest available records vary by dataset."""
     import requests
+    # Public CFTC Legacy Futures Only dataset. Querying schema can change; fail visibly.
+    url = "https://publicreporting.cftc.gov/resource/6dca-aqww.json"
+    params = {"$limit": 5, "$order": "report_date_as_yyyy_mm_dd DESC"}
+    response = requests.get(url, params=params, timeout=20)
+    response.raise_for_status()
+    return pd.DataFrame(response.json())
 
-    # CFTC public Socrata dataset: Legacy Futures Only.
+
+# Official CFTC Legacy Futures Only mapping used by the signal engine.
+# Mapping must be checked against the selected CFTC dataset and contract metadata.
+CFTC_CONTRACT_CODES = {
+    "6E": "099741",  # Euro FX
+    "6B": "096742",  # British Pound
+    "6J": "097741",  # Japanese Yen
+    "6A": "232741",  # Australian Dollar
+    "6C": "090741",  # Canadian Dollar
+    "6S": "092741",  # Swiss Franc
+    "6N": "112741",  # New Zealand Dollar
+}
+
+def load_cot_history(contract_code, limit=52):
+    """Load weekly CFTC Legacy Futures Only net positions for one mapped contract."""
+    import requests
+    if contract_code not in CFTC_CONTRACT_CODES:
+        raise ValueError(f"Kein verifiziertes CFTC-Mapping für {contract_code}")
     url = "https://publicreporting.cftc.gov/resource/6dca-aqww.json"
     params = {
+        "$where": f"cftc_contract_market_code='{CFTC_CONTRACT_CODES[contract_code]}'",
+        "$order": "report_date_as_yyyy_mm_dd DESC",
+        "$limit": str(max(26, min(int(limit), 104))),
         "$select": (
             "report_date_as_yyyy_mm_dd,market_and_exchange_names,"
-            "cftc_contract_market_code,open_interest_all,"
-            "noncomm_positions_long_all,noncomm_positions_short_all"
+            "cftc_contract_market_code,comm_positions_long_all,comm_positions_short_all,"
+            "noncomm_positions_long_all,noncomm_positions_short_all,"
+            "nonrept_positions_long_all,nonrept_positions_short_all,open_interest_all"
         ),
-        "$where": "cftc_contract_market_code in ('099741','098662')",
-        "$order": "report_date_as_yyyy_mm_dd DESC",
-        "$limit": 1000,
     }
-    response = requests.get(url, params=params, timeout=30)
+    response = requests.get(url, params=params, timeout=20, headers={"Accept": "application/json"})
     response.raise_for_status()
     rows = response.json()
+    if not rows:
+        raise ValueError(f"CFTC lieferte keine Datensätze für Code {CFTC_CONTRACT_CODES[contract_code]}")
     df = pd.DataFrame(rows)
-    required = {
-        "report_date_as_yyyy_mm_dd", "market_and_exchange_names",
-        "cftc_contract_market_code", "open_interest_all",
-        "noncomm_positions_long_all", "noncomm_positions_short_all",
-    }
-    if df.empty or not required.issubset(df.columns):
-        raise ValueError("CFTC-Antwort leer oder erwartete Legacy-Felder fehlen.")
-    df["report_date"] = pd.to_datetime(df["report_date_as_yyyy_mm_dd"], errors="coerce")
-    for col in ["open_interest_all", "noncomm_positions_long_all", "noncomm_positions_short_all"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    df = df.dropna(subset=["report_date", "open_interest_all",
-                           "noncomm_positions_long_all", "noncomm_positions_short_all"])
-    df["net_spec"] = df["noncomm_positions_long_all"] - df["noncomm_positions_short_all"]
-    df["net_pct_oi"] = 100 * df["net_spec"] / df["open_interest_all"].replace(0, np.nan)
-    df["contract"] = df["cftc_contract_market_code"].map({
-        "099741": "EUR-Futures (CFTC 099741)",
-        "098662": "USD-Index-Futures (CFTC 098662)",
-    })
-    return df.sort_values(["cftc_contract_market_code", "report_date"]).reset_index(drop=True)
+    required = ["report_date_as_yyyy_mm_dd", "comm_positions_long_all", "comm_positions_short_all",
+                "noncomm_positions_long_all", "noncomm_positions_short_all"]
+    missing = [col for col in required if col not in df.columns]
+    if missing:
+        raise ValueError("CFTC-Schema unvollständig: " + ", ".join(missing))
+    df["date"] = pd.to_datetime(df["report_date_as_yyyy_mm_dd"], errors="coerce", utc=True)
+    numeric = ["comm_positions_long_all", "comm_positions_short_all",
+               "noncomm_positions_long_all", "noncomm_positions_short_all",
+               "nonrept_positions_long_all", "nonrept_positions_short_all", "open_interest_all"]
+    for col in numeric:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df.dropna(subset=["date"] + required[1:]).sort_values("date").drop_duplicates("date")
+    if len(df) < 26:
+        raise ValueError(f"Zu wenig COT-Historie ({len(df)}/26 Wochen)")
+    df["commercial_net"] = df["comm_positions_long_all"] - df["comm_positions_short_all"]
+    df["noncommercial_net"] = df["noncomm_positions_long_all"] - df["noncomm_positions_short_all"]
+    if {"nonrept_positions_long_all", "nonrept_positions_short_all"}.issubset(df.columns):
+        df["nonreportable_net"] = df["nonrept_positions_long_all"] - df["nonrept_positions_short_all"]
+    else:
+        df["nonreportable_net"] = np.nan
+    df["open_interest"] = pd.to_numeric(df.get("open_interest_all"), errors="coerce")
+    age_days = (pd.Timestamp.now(tz="UTC") - df["date"].iloc[-1]).total_seconds() / 86400
+    if age_days > 14:
+        raise ValueError(f"COT-Bericht veraltet ({age_days:.1f} Tage; Limit 14)")
+    df.attrs["market_name"] = str(df.iloc[-1].get("market_and_exchange_names", contract_code))
+    df.attrs["age_days"] = age_days
+    return df.reset_index(drop=True)
 
+def cot_positioning_score(cot_df, invert=False):
+    """Map latest non-commercial net positioning to a bounded 52-week percentile score."""
+    if cot_df is None or len(cot_df) < 26 or "noncommercial_net" not in cot_df:
+        raise ValueError("COT-Historie reicht für einen Positionsscore nicht aus")
+    values = pd.to_numeric(cot_df["noncommercial_net"], errors="coerce").dropna().tail(52)
+    if len(values) < 26:
+        raise ValueError("Zu wenige gültige Non-commercial COT-Werte")
+    latest = float(values.iloc[-1])
+    # Percentile rank of latest net position within the available rolling history.
+    percentile = float((values <= latest).mean())
+    score = int(round(np.clip((percentile - 0.5) * 200, -100, 100)))
+    if invert:
+        score = -score
+    return score, latest, percentile
 
-def cot_eurusd_score(cot_df, max_age_days=14):
-    """Directional EUR/USD score based on speculative net positions as % open interest."""
-    if cot_df is None or cot_df.empty:
-        return None, "Keine COT-Daten"
-    latest = cot_df.sort_values("report_date").groupby("cftc_contract_market_code").tail(1)
-    needed = {"099741", "098662"}
-    if set(latest["cftc_contract_market_code"].astype(str)) != needed:
-        return None, "Euro- oder USD-Index-Kontrakt fehlt"
-    dates = latest["report_date"]
-    age = (pd.Timestamp.now().normalize() - dates.max().normalize()).days
-    if age < 0 or age > max_age_days:
-        return None, f"COT-Bericht veraltet oder Datum ungültig ({age} Tage)"
-    values = {str(row["cftc_contract_market_code"]): float(row["net_pct_oi"])
-              for _, row in latest.iterrows()}
-    # Standardize to a bounded heuristic score. Euro speculative net supports EUR/USD;
-    # long USD Index positioning weighs against EUR/USD, so reverse its sign.
-    eur_component = float(np.clip(values["099741"] / 10 * 100, -100, 100))
-    usd_component = float(np.clip(values["098662"] / 10 * 100, -100, 100))
-    score = int(round(0.5 * eur_component - 0.5 * usd_component))
-    return score, (
-        f"EUR-Futures Net/OI {values['099741']:+.2f}% · "
-        f"USD-Index-Futures Net/OI {values['098662']:+.2f}% · "
-        f"Berichtsdatum {dates.min().date()}–{dates.max().date()}. "
-        "Heuristik, keine Wahrscheinlichkeitsprognose."
-    )
+def seasonality_component_score(prices, invert=False, min_years=5):
+    """Score this calendar month's historical mean return; needs >=5 observations."""
+    if prices is None or prices.empty or not {"date", "close"}.issubset(prices.columns):
+        raise ValueError("Historische Kursdaten für Saisonalität fehlen")
+    d = prices.copy()
+    d["date"] = pd.to_datetime(d["date"], errors="coerce")
+    d["close"] = pd.to_numeric(d["close"], errors="coerce")
+    d = d.dropna(subset=["date", "close"]).sort_values("date")
+    monthly = d.set_index("date")["close"].resample("ME").last().dropna().pct_change().dropna().to_frame("return")
+    current_month = pd.Timestamp.now().month
+    sample = monthly.loc[monthly.index.month == current_month, "return"]
+    if len(sample) < min_years:
+        raise ValueError(f"Zu wenige Beobachtungen für diesen Monat ({len(sample)}/{min_years} Jahre)")
+    mean_return = float(sample.mean())
+    # Transparent scaling: +/-2% average monthly return maps to +/-100.
+    score = int(round(np.clip(mean_return / 0.02 * 100, -100, 100)))
+    if invert:
+        score = -score
+    return score, mean_return, len(sample)
+
 
 # ---------------- FX signal engine: fail closed on missing/invalid inputs ----------------
 FX_PAIRS = {
-    "EUR/USD": {"symbol": "EURUSD=X", "base": "EUR", "quote": "USD", "cot": "6E"},
-    "GBP/USD": {"symbol": "GBPUSD=X", "base": "GBP", "quote": "USD", "cot": "6B"},
-    "USD/JPY": {"symbol": "JPY=X", "base": "USD", "quote": "JPY", "cot": "6J"},
-    "AUD/USD": {"symbol": "AUDUSD=X", "base": "AUD", "quote": "USD", "cot": "6A"},
-    "USD/CAD": {"symbol": "CAD=X", "base": "USD", "quote": "CAD", "cot": "6C"},
-    "USD/CHF": {"symbol": "CHF=X", "base": "USD", "quote": "CHF", "cot": "6S"},
-    "NZD/USD": {"symbol": "NZDUSD=X", "base": "NZD", "quote": "USD", "cot": "6N"},
+    "EUR/USD": {"symbol": "EURUSD=X", "base": "EUR", "quote": "USD", "cot": "6E", "cot_invert": False},
+    "GBP/USD": {"symbol": "GBPUSD=X", "base": "GBP", "quote": "USD", "cot": "6B", "cot_invert": False},
+    "USD/JPY": {"symbol": "JPY=X", "base": "USD", "quote": "JPY", "cot": "6J", "cot_invert": True},
+    "AUD/USD": {"symbol": "AUDUSD=X", "base": "AUD", "quote": "USD", "cot": "6A", "cot_invert": False},
+    "USD/CAD": {"symbol": "CAD=X", "base": "USD", "quote": "CAD", "cot": "6C", "cot_invert": True},
+    "USD/CHF": {"symbol": "CHF=X", "base": "USD", "quote": "CHF", "cot": "6S", "cot_invert": True},
+    "NZD/USD": {"symbol": "NZDUSD=X", "base": "NZD", "quote": "USD", "cot": "6N", "cot_invert": False},
 }
 LONG_SHORT_THRESHOLD = 20
 MAX_PRICE_AGE_DAYS = 4
@@ -278,7 +322,7 @@ with st.sidebar:
         help="Hier eingeben oder sicher in Streamlit Secrets als FRED_API_KEY hinterlegen."
     )
     st.caption(f"Ansicht erstellt: {utc_now()}")
-    st.caption("Build: FX Signal Engine v1.1 · Bias nur aus validierten Daten")
+    st.caption("Build: FX Signal Engine v1.2 · FX + COT · Bias nur aus validierten Daten")
 
 # Demo values are intentionally labeled and are not market data.
 demo_strength = pd.DataFrame({
@@ -325,9 +369,52 @@ elif page in ("FX Signal", "FX Macro"):
                         component_scores["macro"] = macro_result["score"]
                 except Exception as macro_exc:
                     macro_error = str(macro_exc)
-            # COT and seasonality remain invalid until their real inputs are verified.
-            # Do not issue a directional trade bias while required components are missing.
+            cot_result, cot_error = None, "COT noch nicht geladen"
+            season_result, season_error = None, "Saisonalität noch nicht berechnet"
+            # COT is loaded from the public CFTC API and accepted only when mapping,
+            # history length, schema and report freshness pass validation.
+            try:
+                cot_df = load_cot_history(pair_info["cot"], limit=52)
+                cot_score, cot_net, cot_pct = cot_positioning_score(cot_df, invert=pair_info.get("cot_invert", False))
+                cot_result = {"score": cot_score, "net": cot_net, "percentile": cot_pct,
+                              "date": cot_df.iloc[-1]["date"].date().isoformat(),
+                              "market": cot_df.attrs.get("market_name", pair_info["cot"]),
+                              "age_days": cot_df.attrs.get("age_days", None)}
+                component_valid["cot"] = True
+                component_scores["cot"] = cot_score
+            except Exception as cot_exc:
+                cot_error = str(cot_exc)
+            # Seasonality uses the same actual price history; no synthetic fallback.
+            try:
+                if price_ok:
+                    season_score, mean_return, season_n = seasonality_component_score(
+                        validated_prices, invert=pair_info["symbol"] in ("JPY=X", "CAD=X", "CHF=X")
+                    )
+                    season_result = {"score": season_score, "mean_return": mean_return, "n": season_n}
+                    component_valid["seasonality"] = True
+                    component_scores["seasonality"] = season_score
+                else:
+                    season_error = "Kursreihe nicht validiert; Saisonalität blockiert"
+            except Exception as season_exc:
+                season_error = str(season_exc)
+            # The full weighted score includes a 25% technical component, while
+            # the technical direction remains a mandatory confirmation gate.
             result = combine_fx_signal(component_scores, component_valid, tech_score)
+            if result["score"] is not None:
+                result["score"] = int(round(
+                    0.40 * component_scores["macro"] +
+                    0.25 * component_scores["cot"] +
+                    0.10 * component_scores["seasonality"] +
+                    0.25 * (100 * tech_score)
+                ))
+                if result["score"] >= LONG_SHORT_THRESHOLD:
+                    result["bias"] = "LONG" if tech_score == 1 else "NEUTRAL"
+                    result["reason"] = "LONG: gewichteter Score erreicht Schwelle und Technik bestätigt" if tech_score == 1 else "LONG blockiert: Technik bestätigt nicht bullish"
+                elif result["score"] <= -LONG_SHORT_THRESHOLD:
+                    result["bias"] = "SHORT" if tech_score == -1 else "NEUTRAL"
+                    result["reason"] = "SHORT: gewichteter Score erreicht Schwelle und Technik bestätigt" if tech_score == -1 else "SHORT blockiert: Technik bestätigt nicht bearish"
+                else:
+                    result["bias"], result["reason"] = "NEUTRAL", "Gewichteter Score innerhalb der Schwelle ±20"
             flags = [price_ok, component_valid["macro"], component_valid["cot"], component_valid["seasonality"], tech_score is not None]
             q_data = quality_percent(flags)
             c1, c2, c3, c4 = st.columns(4)
@@ -351,11 +438,23 @@ elif page in ("FX Signal", "FX Macro"):
             quality_rows = [
                 {"Komponente": "FX-Kursdaten", "Status": "VALIDIERT" if price_ok else "UNGÜLTIG", "Einordnung": price_message},
                 {"Komponente": "Relatives Makro beider Währungen", "Status": "VALIDIERT" if component_valid["macro"] else "FEHLT", "Einordnung": macro_result["details"] if macro_result is not None else str(macro_error)},
-                {"Komponente": "COT", "Status": "FEHLT", "Einordnung": f"Kontrakt {pair_info['cot']} muss über Reporttyp, Contract und Positionsfelder verifiziert werden."},
-                {"Komponente": "Saisonalität", "Status": "FEHLT", "Einordnung": "Historische Preise sind abrufbar, aber saisonale Stichprobe/Abdeckung wird noch nicht als validierter Signalinput freigegeben."},
+                {"Komponente": "COT", "Status": "VALIDIERT" if cot_result is not None else "FEHLT", "Einordnung": (f"{cot_result['market']} · Report {cot_result['date']} · Non-commercial net {cot_result['net']:,.0f} · Score {cot_result['score']:+d} · {cot_result['age_days']:.1f} Tage alt" if cot_result is not None else cot_error)},
+                {"Komponente": "Saisonalität", "Status": "VALIDIERT" if season_result is not None else "FEHLT", "Einordnung": (f"Kalendermonat {datetime.now().strftime('%B')} · Ø {season_result['mean_return']:.2%} über {season_result['n']} Jahre · Score {season_result['score']:+d}" if season_result is not None else season_error)},
                 {"Komponente": "Technische Bestätigung", "Status": "VALIDIERT" if tech_score is not None else "FEHLT", "Einordnung": tech_message},
             ]
             st.dataframe(pd.DataFrame(quality_rows), use_container_width=True, hide_index=True)
+            cota, cotb, cotc = st.columns(3)
+            if cot_result is not None:
+                cota.metric("COT-Score", f"{cot_result['score']:+d} / 100")
+                cotb.metric("Non-commercial net", f"{cot_result['net']:,.0f}")
+                cotc.metric("COT-Bericht", cot_result["date"])
+                st.caption(f"CFTC Legacy Futures Only · {cot_result['market']} · {cot_result['age_days']:.1f} Tage alt. Non-commercial net ist Futures-Positionierung, kein vollständiges Spot-FX-Orderflow-Maß.")
+            else:
+                cota.warning("COT nicht validiert: " + cot_error)
+            if season_result is not None:
+                st.caption(f"Saisonalität: aktueller Kalendermonat Ø {season_result['mean_return']:.2%} aus {season_result['n']} historischen Monatsbeobachtungen; Score {season_result['score']:+d}.")
+            else:
+                st.caption("Saisonalität nicht freigegeben: " + season_error)
             if price_ok:
                 st.line_chart(validated_prices.set_index("date")["close"])
             st.warning("Fail-closed aktiv: Der finale Bias bleibt NEUTRAL, bis Makro, COT und Saisonalität aus echten, korrekt zugeordneten und frischen Daten validiert sind. Der Makro-Score allein ist noch kein Gesamt- oder Handelssignal.")
@@ -459,33 +558,37 @@ elif page == "Saisonalität":
 
 elif page == "COT / Positioning":
     st.subheader("COT / Positioning")
-    st.caption("Offizielle CFTC Legacy Futures Only-Daten. COT misst Futures-Positionierung, nicht den gesamten Spot-FX-Markt.")
-    st.info("EUR/USD-Prototyp: Euro FX (CFTC 099741) plus USD Index (CFTC 098662). Die USD-Index-Richtung wird für EUR/USD umgekehrt.")
-    if st.button("Offizielle CFTC-COT-Daten laden und validieren"):
+    st.caption("CFTC-Daten sind Futures-Positionierung, nicht der gesamte globale Spot-FX-Markt. Contract code mapping muss je Datensatz geprüft werden.")
+    cot_contract = st.selectbox("CFTC-Futures-Kontrakt", list(CFTC_CONTRACT_CODES), format_func=lambda c: {
+        "6E": "Euro FX (6E)", "6B": "British Pound (6B)", "6J": "Japanese Yen (6J)",
+        "6A": "Australian Dollar (6A)", "6C": "Canadian Dollar (6C)",
+        "6S": "Swiss Franc (6S)", "6N": "New Zealand Dollar (6N)"
+    }.get(c, c))
+    if st.button("CFTC-Historie laden", type="primary"):
         try:
-            cot = load_cot_legacy_fx()
-            score, details = cot_eurusd_score(cot)
-            st.session_state["cot_fx_data"] = cot
-            st.session_state["cot_eurusd_score"] = score
-            st.session_state["cot_eurusd_details"] = details
-            if score is None:
-                st.warning(f"COT-Score nicht verfügbar: {details}")
-            else:
-                st.metric("COT-Score EUR/USD", f"{score:+d} / 100")
-                st.caption(details)
-                st.success("Kontrakte und Pflichtfelder vorhanden; Aktualität geprüft.")
-            st.dataframe(cot.sort_values("report_date", ascending=False), use_container_width=True, hide_index=True)
+            cot = load_cot_history(cot_contract, limit=52)
+            st.success(f"{len(cot)} wöchentliche Datensätze · letzter Bericht {cot.iloc[-1]['date'].date()} · {cot.attrs.get('age_days', 0):.1f} Tage alt.")
+            st.caption("Quelle: CFTC Public Reporting API · Legacy Futures Only. Net = Long minus Short. Non-reportable ist keine direkt ausgewiesene Retail-Kategorie.")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Commercial net", f"{cot.iloc[-1]['commercial_net']:,.0f}")
+            c2.metric("Non-commercial net", f"{cot.iloc[-1]['noncommercial_net']:,.0f}")
+            c3.metric("Non-reportable net", "—" if pd.isna(cot.iloc[-1]['nonreportable_net']) else f"{cot.iloc[-1]['nonreportable_net']:,.0f}")
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=cot["date"], y=cot["commercial_net"], mode="lines", name="Commercial net"))
+            fig.add_trace(go.Scatter(x=cot["date"], y=cot["noncommercial_net"], mode="lines", name="Non-commercial net"))
+            fig.add_trace(go.Scatter(x=cot["date"], y=cot["nonreportable_net"], mode="lines", name="Non-reportable net"))
+            fig.update_layout(title=f"{cot.attrs.get('market_name', cot_contract)} — Netto-Positionen", yaxis_title="Kontrakte", legend_title="Gruppe")
+            st.plotly_chart(fig, use_container_width=True)
+            st.dataframe(cot[["date", "commercial_net", "noncommercial_net", "nonreportable_net", "open_interest"]].tail(20).sort_values("date", ascending=False), use_container_width=True, hide_index=True)
         except Exception as e:
-            st.error(f"CFTC-Abfrage fehlgeschlagen: {e}")
-    elif "cot_fx_data" in st.session_state:
-        score = st.session_state.get("cot_eurusd_score")
-        details = st.session_state.get("cot_eurusd_details", "")
-        if score is not None:
-            st.metric("COT-Score EUR/USD", f"{score:+d} / 100")
-        st.caption(details)
-        st.dataframe(st.session_state["cot_fx_data"].sort_values("report_date", ascending=False),
-                     use_container_width=True, hide_index=True)
-    st.caption("Score ist eine transparente Heuristik aus spekulativer Netto-Positionierung relativ zum Open Interest; erst nach Rücktest als Handelssignal verwenden.")
+            st.error(f"CFTC-Daten nicht verfügbar/validiert: {e}")
+    st.markdown("#### Kontrakte für FX-Recherche")
+    st.dataframe(pd.DataFrame([
+        ["EUR", "Euro FX", "6E"], ["GBP", "British Pound", "6B"], ["JPY", "Japanese Yen", "6J"],
+        ["CAD", "Canadian Dollar", "6C"], ["AUD", "Australian Dollar", "6A"],
+        ["CHF", "Swiss Franc", "6S"], ["NZD", "New Zealand Dollar", "6N"], ["USD", "Kein einzelner direkter G10-COT-Proxy", "—"]
+    ], columns=["Währung", "CFTC-Futures-Kontrakt", "Ticker/Code"]), use_container_width=True, hide_index=True)
+    st.warning("Der CFTC-Endpunkt und seine Felder können sich ändern. Vor produktiver Nutzung Reporttyp (Legacy/Disaggregated/TFF), Datenfelder, Berichtswoche und Kontrakt-ID validieren.")
 
 elif page == "NQ & ES":
     st.subheader("NQ & ES Macro Lens")
@@ -541,7 +644,7 @@ else:
     sources = pd.DataFrame([
         ["Makro/Zinsen", "FRED API", "API-Key nötig; Frequenz je Serie; kein Konsenssurprise ohne Zusatzanbieter"],
         ["Zentralbankpfade", "Fed, EZB, BoE, BoJ, SNB, BoC, RBA, RBNZ", "Offizielle Veröffentlichungen; Parsing/Mapping erforderlich"],
-        ["COT", "CFTC Public Reporting", "Wöchentlich; Reporttyp und Contract mapping validieren"],
+        ["COT", "CFTC Public Reporting · Legacy Futures Only", "Wöchentlich; Kontraktcode/Schema und Aktualität werden zur Laufzeit geprüft"],
         ["Historische Preise", "yfinance Wrapper / Yahoo Finance", "Nicht garantiert offiziell, vollständig, lizenziert oder echtzeitfähig"],
         ["FX-Kurse", "FX-Datenanbieter / Broker", "Aktualität, Historie und Lizenzbedingungen validieren"],
         ["Konsensdaten", "Separater Makro-Kalender-Anbieter", "Meist separat/lizenziert"]
@@ -557,4 +660,4 @@ else:
     st.caption("Die Beispielabfrage akzeptiert den Schlüssel im Sidebar-Feld. Für dauerhaftes Hosting besser st.secrets verwenden und das Secret nicht ins GitHub-Repository hochladen.")
 
 st.divider()
-st.caption("Macro / Regime Terminal — Forex-only Signal Engine. NEUTRAL bei unzureichenden oder nicht validierten Daten. Keine Anlageberatung.")
+st.caption("Macro / Regime Terminal — FX + COT Signal Engine. NEUTRAL bei unzureichenden oder nicht validierten Daten. COT ist wöchentlich, kein Spot-FX-Orderflow. Keine Anlageberatung.")
