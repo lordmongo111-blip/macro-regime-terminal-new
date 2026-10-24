@@ -238,22 +238,42 @@ def technical_confirmation(prices):
 
 
 def combine_fx_signal(component_scores, component_valid, technical_score):
-    """Score weights: macro 40, COT 25, seasonality 10. Technical confirms/blocks."""
+    """Weighted composite: macro 40%, COT 25%, seasonality 10%, technical 25%.
+
+    Every input is required and must be validated. Technical score is -1/0/+1,
+    scaled to -100/0/+100; a neutral technical read cannot confirm a direction.
+    """
     required = ("macro", "cot", "seasonality")
     missing = [name for name in required if not component_valid.get(name, False)]
     if missing or technical_score is None:
-        return {"bias": "NEUTRAL", "score": None, "reason": "Unzureichende validierte Daten: " + ", ".join(missing + (["Technik"] if technical_score is None else [])), "signal_quality": "NICHT BEWERTBAR"}
-    score = round((0.40 * component_scores["macro"] + 0.25 * component_scores["cot"] + 0.10 * component_scores["seasonality"]) / 0.75)
-    # Technical analysis confirms or blocks; it does not add to the directional score.
+        blocked = missing + (["Technik"] if technical_score is None else [])
+        return {"bias": "NEUTRAL", "score": None,
+                "reason": "Signal gesperrt: nicht validiert — " + ", ".join(blocked),
+                "signal_quality": "NICHT BEWERTBAR"}
+    if any(name not in component_scores for name in required):
+        return {"bias": "NEUTRAL", "score": None,
+                "reason": "Signal gesperrt: für mindestens eine validierte Komponente fehlt der Score",
+                "signal_quality": "NICHT BEWERTBAR"}
+    score = int(round(
+        0.40 * component_scores["macro"] +
+        0.25 * component_scores["cot"] +
+        0.10 * component_scores["seasonality"] +
+        0.25 * (100 * technical_score)
+    ))
     if score >= LONG_SHORT_THRESHOLD:
-        bias = "LONG" if technical_score == 1 else "NEUTRAL"
-        reason = "Technik bestätigt LONG" if technical_score == 1 else "LONG blockiert: Technik bestätigt nicht bullish"
+        if technical_score == 1:
+            bias, reason = "LONG", "LONG: gewichteter Score ≥ +20 und Technik bestätigt bullish"
+        else:
+            bias, reason = "NEUTRAL", "LONG blockiert: Technik bestätigt nicht bullish"
     elif score <= -LONG_SHORT_THRESHOLD:
-        bias = "SHORT" if technical_score == -1 else "NEUTRAL"
-        reason = "Technik bestätigt SHORT" if technical_score == -1 else "SHORT blockiert: Technik bestätigt nicht bearish"
+        if technical_score == -1:
+            bias, reason = "SHORT", "SHORT: gewichteter Score ≤ −20 und Technik bestätigt bearish"
+        else:
+            bias, reason = "NEUTRAL", "SHORT blockiert: Technik bestätigt nicht bearish"
     else:
-        bias, reason = "NEUTRAL", "Score innerhalb der Schwelle ±20"
-    return {"bias": bias, "score": score, "reason": reason, "signal_quality": "MITTEL" if bias != "NEUTRAL" else "NIEDRIG"}
+        bias, reason = "NEUTRAL", "Gewichteter Score innerhalb der Schwelle ±20"
+    quality = "MITTEL" if bias != "NEUTRAL" else "NIEDRIG"
+    return {"bias": bias, "score": score, "reason": reason, "signal_quality": quality}
 
 
 def calculate_eurusd_macro_score(api_key):
@@ -397,24 +417,8 @@ elif page in ("FX Signal", "FX Macro"):
                     season_error = "Kursreihe nicht validiert; Saisonalität blockiert"
             except Exception as season_exc:
                 season_error = str(season_exc)
-            # The full weighted score includes a 25% technical component, while
-            # the technical direction remains a mandatory confirmation gate.
+            # Composite score is calculated once in the engine; missing inputs fail closed.
             result = combine_fx_signal(component_scores, component_valid, tech_score)
-            if result["score"] is not None:
-                result["score"] = int(round(
-                    0.40 * component_scores["macro"] +
-                    0.25 * component_scores["cot"] +
-                    0.10 * component_scores["seasonality"] +
-                    0.25 * (100 * tech_score)
-                ))
-                if result["score"] >= LONG_SHORT_THRESHOLD:
-                    result["bias"] = "LONG" if tech_score == 1 else "NEUTRAL"
-                    result["reason"] = "LONG: gewichteter Score erreicht Schwelle und Technik bestätigt" if tech_score == 1 else "LONG blockiert: Technik bestätigt nicht bullish"
-                elif result["score"] <= -LONG_SHORT_THRESHOLD:
-                    result["bias"] = "SHORT" if tech_score == -1 else "NEUTRAL"
-                    result["reason"] = "SHORT: gewichteter Score erreicht Schwelle und Technik bestätigt" if tech_score == -1 else "SHORT blockiert: Technik bestätigt nicht bearish"
-                else:
-                    result["bias"], result["reason"] = "NEUTRAL", "Gewichteter Score innerhalb der Schwelle ±20"
             flags = [price_ok, component_valid["macro"], component_valid["cot"], component_valid["seasonality"], tech_score is not None]
             q_data = quality_percent(flags)
             c1, c2, c3, c4 = st.columns(4)
