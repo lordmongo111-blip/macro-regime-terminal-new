@@ -15,71 +15,32 @@ MONTHS = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt",
 st.markdown("""
 <style>
 :root { color-scheme: dark; }
-.stApp { background: radial-gradient(ellipse at 78% -10%, #14253a 0%, #080d14 48%, #070b11 100%); }
-.block-container { max-width: 1800px; padding: 1.15rem 1.65rem 2.5rem; }
-[data-testid="stHeader"] { background: rgba(7,11,17,.92); }
-[data-testid="stSidebar"] { background: linear-gradient(180deg,#0b121c 0%,#101925 100%); border-right: 1px solid #1c2b3b; }
-[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p { color:#a8bfd3; }
-[data-testid="stSidebar"] [role="radiogroup"] label { border-radius: 8px; padding: .38rem .5rem; margin: 1px 0; }
-[data-testid="stSidebar"] [role="radiogroup"] label:hover { background:#192637; }
-h1 { letter-spacing:-.035em; font-weight:800; color:#f4f7fb; }
-h2,h3 { color:#eaf1f8; letter-spacing:-.02em; }
-p, label, .stCaption { color:#9eb2c7; }
-[data-testid="stMetric"] { background:linear-gradient(145deg,rgba(20,31,45,.96),rgba(11,18,27,.96)); border:1px solid #1d2d3e; padding:16px 17px; border-radius:13px; box-shadow:0 8px 24px rgba(0,0,0,.12); }
-[data-testid="stMetricLabel"] { color:#9db5ca !important; font-size:.82rem; }
-[data-testid="stMetricValue"] { color:#f4f7fb; font-weight:750; }
-[data-testid="stMetricDelta"] { font-weight:650; }
-[data-testid="stVerticalBlockBorderWrapper"] { border-color:#1c2b3b !important; border-radius:13px; }
-[data-testid="stAlert"] { border-radius:10px; border:1px solid #29384a; }
-.stButton > button, [data-testid="stDownloadButton"] button { background:linear-gradient(105deg,#f20d3a,#c91432); color:white; border:1px solid #ff3454; border-radius:9px; font-weight:700; min-height:2.55rem; transition:all .15s ease; }
-.stButton > button:hover, [data-testid="stDownloadButton"] button:hover { background:#ff2448; border-color:#ff526d; color:white; box-shadow:0 0 18px rgba(242,13,58,.2); }
-[data-baseweb="select"] > div, [data-baseweb="input"] > div, [data-baseweb="textarea"] > div { background:#111b28; border-color:#2a3b4f; border-radius:8px; }
-[data-testid="stDataFrame"], [data-testid="stTable"] { border:1px solid #1d2d3e; border-radius:10px; overflow:hidden; }
-hr { border-color:#203043; }
-a { color:#55b9ff; }
-.small-muted { color:#8198ad; font-size:.85rem; }
-/* Harmonised Plotly chart styling across all modules */
-.js-plotly-plot .plotly .modebar { background:transparent !important; }
-@media (max-width: 900px) { .block-container { padding: .8rem .7rem 2rem; } }
-
-/* Reference-inspired terminal accents; analysis logic remains unchanged */
-[data-testid="stSidebar"] { background:linear-gradient(180deg,#091521 0%,#07111a 100%); border-right:1px solid #1a2b3a; }
-[data-testid="stSidebar"] [role="radiogroup"] label { border-radius:8px; padding:.42rem .55rem; margin:2px 0; }
-[data-testid="stSidebar"] [role="radiogroup"] label:hover { background:#192637; }
-[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) { background:linear-gradient(100deg,#ff1744,#d90b32); }
-[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) p { color:#fff !important; font-weight:700; }
-[data-testid="stMetric"] { background:linear-gradient(145deg,#0d1b28,#0b1722); border:1px solid #1a2b3a; border-radius:13px; }
-[data-testid="stHeader"] { background:rgba(5,13,21,.9); }
-.stApp { background:radial-gradient(ellipse at 75% 0%,#102236 0%,#07111b 55%); }
-h1,h2,h3 { color:#f4f8fc; }
-.stButton > button { background:linear-gradient(100deg,#ff1744,#e90032); border:0; color:#fff; border-radius:9px; font-weight:700; }
-
-/* Reference dashboard refinements */
-.block-container { max-width: 1920px; padding: .9rem 1.45rem 2rem; }
-[data-testid="stSidebar"] { min-width: 220px; }
-[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h1,
-[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h2,
-[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 { letter-spacing:-.02em; }
-[data-testid="stSidebar"] [role="radiogroup"] { gap: 3px; }
-[data-testid="stSidebar"] [role="radiogroup"] label {
-  display:flex; align-items:center; min-height:34px; padding:.35rem .55rem;
-  border:1px solid transparent; transition:background .15s ease;
-}
-[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {
-  box-shadow:0 5px 18px rgba(255,23,68,.16); border-color:rgba(255,75,105,.45);
-}
-[data-testid="stMetric"] { min-height:105px; display:flex; flex-direction:column; justify-content:center; }
-[data-testid="stMetricValue"] { font-size:clamp(1.3rem,2vw,2rem); }
-[data-testid="stHorizontalBlock"] { gap: .8rem; }
-[data-testid="stDataFrame"] { background:#0a1420; }
-[data-testid="stTabs"] button { font-weight:650; }
-[data-testid="stPlotlyChart"] { background:linear-gradient(180deg,rgba(10,22,34,.45),rgba(7,15,24,.2)); border:1px solid #182a3b; border-radius:12px; padding:5px; }
-.stAlert p { color:#d8e5f1 !important; }
-.stButton > button:focus { box-shadow:0 0 0 2px #07111b,0 0 0 4px #ff2447; }
-@media (min-width: 1400px) {
-  .block-container { padding-left:1.8rem; padding-right:1.8rem; }
-}
-
+.stApp { background: radial-gradient(ellipse at 75% -10%, #10263a 0%, #07111c 48%, #050b12 100%); color: #e8f0f8; }
+.block-container { max-width: 1800px; padding: 1.15rem 1.45rem 2.2rem; }
+[data-testid="stHeader"] { background: rgba(5, 12, 20, .88); }
+[data-testid="stSidebar"] { background: linear-gradient(180deg,#081522 0%,#050d16 100%); border-right: 1px solid #1a2b3b; }
+[data-testid="stSidebar"] > div { padding-top: 1.1rem; }
+[data-testid="stSidebar"] [data-testid="stRadio"] label { color: #b8c9d9; }
+[data-testid="stSidebar"] [role="radiogroup"] { gap: .25rem; }
+[data-testid="stSidebar"] [role="radiogroup"] label { border-radius: 8px; padding: .35rem .55rem; }
+[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) { background: linear-gradient(90deg,#ff1744,#d90b32); color: white; }
+h1,h2,h3 { color: #f1f6fc; letter-spacing: -.025em; }
+h1 { font-size: clamp(1.8rem,2.5vw,2.65rem); font-weight: 800; }
+h2 { font-weight: 750; }
+p, label, .stMarkdown { color: #c3d2e1; }
+[data-testid="stMetric"] { background: linear-gradient(145deg,rgba(20,31,46,.96),rgba(8,18,29,.96)); border: 1px solid #1c3042; padding: 1rem 1.05rem; border-radius: 13px; box-shadow: 0 8px 24px rgba(0,0,0,.14); }
+[data-testid="stMetricLabel"] { color: #a9bfd2 !important; }
+[data-testid="stMetricValue"] { color: #f4f8fc !important; font-weight: 800; }
+[data-testid="stMetricDelta"] { font-weight: 650; }
+[data-testid="stVerticalBlockBorderWrapper"] > div { border-color: #1b3042 !important; border-radius: 13px; }
+[data-testid="stDataFrame"], [data-testid="stTable"] { border: 1px solid #1c3042; border-radius: 10px; overflow: hidden; }
+.stButton > button { background: linear-gradient(100deg,#ff1744,#df0c35); color: white; border: 0; border-radius: 9px; font-weight: 750; min-height: 2.6rem; }
+.stButton > button:hover { background: #ff3157; color: white; border: 1px solid #ff6b85; }
+.stTextInput input, .stSelectbox [data-baseweb="select"], .stMultiSelect [data-baseweb="select"] { background-color: #101c2a; border-color: #263b4e; }
+[data-testid="stAlert"] { border-radius: 10px; }
+hr { border-color: #1d3040; }
+.small-muted { color: #849bb0; font-size: .85rem; }
+@media (max-width: 900px) { .block-container { padding: .8rem .8rem 1.5rem; } }
 </style>
 """, unsafe_allow_html=True)
 
@@ -464,7 +425,6 @@ st.caption("Forex only · Makro · COT · Saisonalität · technische Bestätigu
 st.warning("Datenstatus: Ohne konfigurierte Datenquelle werden keine aktuellen Marktmeinungen behauptet. Historische Daten sind nicht automatisch Echtzeitdaten; Anbieter, Verzögerung und Lizenzbedingungen beachten.")
 
 with st.sidebar:
-    st.markdown('<div style="display:flex;gap:10px;align-items:center;padding:4px 0 14px;border-bottom:1px solid #1a2b3a;margin-bottom:14px"><div style="width:34px;height:34px;border:3px solid #ff2447;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#ff2447;font-size:20px;font-weight:800">◇</div><div><div style="font-weight:800;font-size:16px;color:#f7fbff">MACRO / REGIME</div><div style="font-size:10px;color:#8ea6bb">FX · Makro · COT · Quant</div></div></div>', unsafe_allow_html=True)
     st.header("Einstellungen")
     page = st.radio("Modul", ["Übersicht", "FX Signal", "ML Lab", "Saisonalität", "COT / Positioning", "NQ & ES", "Quant & Regression", "Datenquellen"])
     st.divider()
@@ -487,129 +447,20 @@ demo_strength = pd.DataFrame({
 demo_strength["Status"] = "DEMO"
 
 if page == "Übersicht":
-    st.subheader("Zentrales Dashboard")
-    st.caption("Ein gemeinsamer Überblick über FX, US-Makro und Cross-Asset-Proxys. Daten werden nur auf Knopfdruck abgerufen; Yahoo Finance ist kein garantierter Echtzeitfeed.")
-    st.warning("Regime-Einschätzung ist ein transparenter Proxy aus NQ/ES/VIX und kein validiertes Handelssignal. Fehlende Daten bleiben fehlend.")
-
-    if "dashboard_snapshot" not in st.session_state:
-        st.session_state["dashboard_snapshot"] = None
-
-    dcol1, dcol2 = st.columns([1, 3])
-    with dcol1:
-        refresh_dashboard = st.button("Dashboard aktualisieren", type="primary", use_container_width=True)
-    with dcol2:
-        st.caption("Abruf: tägliche historische Kurse via yfinance sowie ausgewählte FRED-Reihen. Der FRED-Key wird aus Sidebar/Secrets verwendet.")
-
-    if refresh_dashboard:
-        price_rows, price_frames, fred_rows, errors = [], {}, [], []
-        dashboard_symbols = {"EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "JPY=X",
-                             "AUD/USD": "AUDUSD=X", "USD/CAD": "CAD=X", "USD/CHF": "CHF=X",
-                             "NZD/USD": "NZDUSD=X", "Nasdaq-100 Future": "NQ=F",
-                             "S&P 500 Future": "ES=F", "VIX": "^VIX"}
-        with st.spinner("Lade Markt- und Makrodaten…"):
-            for label, symbol in dashboard_symbols.items():
-                try:
-                    hist = load_market_history(symbol, "1y")
-                    if hist.empty:
-                        raise ValueError("keine Kursdaten zurückgegeben")
-                    hist = hist.copy()
-                    hist["date"] = pd.to_datetime(hist["date"], utc=True, errors="coerce")
-                    hist["close"] = pd.to_numeric(hist["close"], errors="coerce")
-                    hist = hist.dropna(subset=["date", "close"]).sort_values("date")
-                    if hist.empty or float(hist.iloc[-1]["close"]) <= 0:
-                        raise ValueError("keine gültigen Schlusskurse")
-                    last = hist.iloc[-1]
-                    age_days = (pd.Timestamp.now(tz="UTC") - last["date"]).total_seconds() / 86400
-                    ret20 = float(hist["close"].pct_change(20).iloc[-1] * 100) if len(hist) > 20 else np.nan
-                    price_rows.append({"Markt": label, "Symbol": symbol, "Letzter Kurs": float(last["close"]),
-                                       "Letztes Datum (UTC)": last["date"].date().isoformat(),
-                                       "Alter (Tage)": round(age_days, 1), "20T-Rendite (%)": ret20,
-                                       "Status": "OK" if age_days <= 4 else "VERALTET"})
-                    price_frames[label] = hist
-                except Exception as exc:
-                    errors.append(f"{label} ({symbol}): {exc}")
-            fred_map = {"FEDFUNDS": ("Fed Funds Rate", "% p.a."), "DGS10": ("US Treasury 10Y", "% p.a."),
-                        "DGS2": ("US Treasury 2Y", "% p.a."), "DTWEXBGS": ("Breiter USD-Index", "Index")}
-            if fred_key:
-                for sid, (label, unit) in fred_map.items():
-                    try:
-                        series = get_fred_series(sid, fred_key)
-                        if series.empty:
-                            raise ValueError("keine Beobachtungen")
-                        last = series.iloc[-1]
-                        fred_rows.append({"Indikator": label, "FRED-Serie": sid,
-                                          "Letzter Wert": float(last["value"]), "Einheit": unit,
-                                          "Beobachtungsdatum": pd.Timestamp(last["date"]).date().isoformat(),
-                                          "Status": "OK"})
-                    except Exception as exc:
-                        errors.append(f"FRED {sid}: {exc}")
-            else:
-                errors.append("FRED: API-Key fehlt; US-Makroindikatoren wurden übersprungen.")
-        st.session_state["dashboard_snapshot"] = {"prices": price_rows, "frames": price_frames,
-                                                    "fred": fred_rows, "errors": errors,
-                                                    "updated": utc_now()}
-
-    snap = st.session_state.get("dashboard_snapshot")
-    if snap is None:
-        st.info("Klicke auf „Dashboard aktualisieren“, um aktuelle verfügbare Daten abzurufen. Bis dahin werden bewusst keine Marktwerte oder Scores erfunden.")
-        st.markdown("#### Enthaltene Bereiche")
-        st.write("FX-Spot-Proxys · NQ/ES und VIX · FRED-Zinsen und USD-Index · Datenalter und Fehlerstatus")
-    else:
-        price_df = pd.DataFrame(snap["prices"])
-        fred_df = pd.DataFrame(snap["fred"])
-        st.caption(f"Letzter Dashboard-Abruf: {snap['updated']}")
-        if not price_df.empty:
-            def _row(label):
-                found = price_df.loc[price_df["Markt"] == label]
-                return found.iloc[0] if not found.empty else None
-            nq, es, vix = _row("Nasdaq-100 Future"), _row("S&P 500 Future"), _row("VIX")
-            fresh = int((price_df["Status"] == "OK").sum())
-            total = len(price_df)
-            regime = "UNBESTIMMT"
-            regime_note = "NQ/ES/VIX-Daten fehlen oder sind nicht vollständig frisch."
-            if nq is not None and es is not None and vix is not None and all(r["Status"] == "OK" for r in (nq, es, vix)):
-                if nq["20T-Rendite (%)"] > 0 and es["20T-Rendite (%)"] > 0 and vix["20T-Rendite (%)"] <= 0:
-                    regime, regime_note = "RISK-ON (PROXY)", "NQ und ES positiv über 20 Handelstage, VIX nicht gestiegen."
-                elif nq["20T-Rendite (%)"] < 0 and es["20T-Rendite (%)"] < 0 and vix["20T-Rendite (%)"] > 0:
-                    regime, regime_note = "RISK-OFF (PROXY)", "NQ und ES negativ über 20 Handelstage, VIX gestiegen."
-                else:
-                    regime, regime_note = "GEMISCHT / NEUTRAL", "Cross-Asset-Bedingungen widersprechen sich oder sind uneindeutig."
-            fx_labels = ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "USD/CHF", "NZD/USD"]
-            fx = price_df[price_df["Markt"].isin(fx_labels) & (price_df["Status"] == "OK")]
-            strongest = weakest = "—"
-            if len(fx) >= 2:
-                # Directional 20d proxy is pair-based and is NOT a normalized G10 currency-strength model.
-                strongest = str(fx.sort_values("20T-Rendite (%)", ascending=False).iloc[0]["Markt"])
-                weakest = str(fx.sort_values("20T-Rendite (%)").iloc[0]["Markt"])
-            k1, k2, k3, k4 = st.columns(4)
-            k1.metric("Risk Regime", regime)
-            k2.metric("FX-Paare verfügbar", f"{len(fx)}/7")
-            k3.metric("Frische Marktserien", f"{fresh}/{total}")
-            k4.metric("Letzter Abruf", snap["updated"].split(" ")[1])
-            st.caption(regime_note)
-            st.markdown("#### FX- und Cross-Asset-Märkte")
-            st.dataframe(price_df, use_container_width=True, hide_index=True)
-            charts = st.columns(2)
-            for col, label in zip(charts, ["Nasdaq-100 Future", "S&P 500 Future"]):
-                hist = snap["frames"].get(label)
-                with col:
-                    st.markdown(f"**{label}**")
-                    if hist is not None and not hist.empty:
-                        st.line_chart(hist.set_index("date")["close"])
-                    else:
-                        st.caption("Keine Daten verfügbar.")
-        else:
-            st.error("Keine Kursdaten verfügbar; das Regime bleibt unbestimmt.")
-        st.markdown("#### US-Makro (FRED)")
-        if not fred_df.empty:
-            st.dataframe(fred_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("Keine FRED-Reihen geladen. FRED_API_KEY in Streamlit Secrets konfigurieren oder links in der Sidebar eingeben.")
-        if snap["errors"]:
-            with st.expander(f"Datenprobleme ({len(snap['errors'])})", expanded=False):
-                for err in snap["errors"]:
-                    st.write(f"- {err}")
-        st.caption("Hinweis: „Stärkste/Schwächste“ wird hier bewusst nicht als Währungsstärke ausgegeben. Paar-Renditen sind nicht über alle G10-Währungen normalisiert. FX Signal, ML Lab, COT, Saisonalität, NQ & ES und Quant & Regression bleiben eigenständige Module.")
+    st.subheader("Cross-Asset Überblick")
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Risk regime", "UNBESTIMMT", help="Wird erst nach Verbindung valider Inputs berechnet.")
+    k2.metric("Stärkste CCY", "—")
+    k3.metric("Schwächste CCY", "—")
+    k4.metric("Datenqualität", "OHNE FEED")
+    st.info("Hier werden keine Demo-Scores als aktuelle Marktmeinung dargestellt. Verbinde unten Datenquellen, bevor du Signale nutzt.")
+    st.markdown("#### Gewünschte Module")
+    st.write("Forex-Paare · relatives Makro beider Währungsräume · COT-Futures-Positionierung · Monats-Saisonalität · technische Bestätigung · Daten- und Signalqualität")
+    st.markdown("#### Start-Checkliste")
+    st.write("- [ ] FRED API-Key für Makro- und Zinsserien hinterlegen")
+    st.write("- [ ] Historische Forex-Preise abrufen und Aktualität/Vollständigkeit prüfen")
+    st.write("- [ ] CFTC-Kontrakte/Kategorien korrekt zuordnen")
+    st.write("- [ ] Regeln und Schwellenwerte testen, bevor Signale produktiv genutzt werden")
 
 elif page in ("FX Signal", "FX Macro"):
     st.subheader("Forex Bias Engine")
@@ -858,82 +709,9 @@ elif page == "ML Lab":
     horizon = st.selectbox("Prognosehorizont", [10, 30, 60, 90], index=3, format_func=lambda x: f"{x} Handelstage", key="ml_horizon")
     years = st.selectbox("Trainingshistorie", ["5y", "10y", "max"], index=1, key="ml_years")
     st.caption(f"Referenz: {proxy['reference']}. Bei JPY/CHF/CAD wird die inverse USD-Notierung verwendet, damit steigende Werte eine stärkere ausgewählte Währung bedeuten.")
-
-    # Fundamental panel for the selected currency alone (not a currency-pair comparison).
-    st.markdown("#### Fundamentaler Währungs-Scanner — jeder Punkt ein Faktor")
-    st.caption("Bewertet ausschließlich die oben ausgewählte Einzelwährung. Zins- und Inflationszeitreihen werden mit konservativen Veröffentlichungslags zeitlich an die Kursdaten angelegt und – sofern ausreichend Historie verfügbar ist – direkt als Features im ML-Modell trainiert.")
-    fund_ccy = currency.split(" — ")[0]
-    cfg = MACRO_CURRENCY_SERIES.get(fund_ccy)
-    if not fred_key:
-        st.info("Für fundamentale Einzelwährungsdaten bitte links einen FRED API-Key eintragen. Ohne Key werden keine Makro-Bewertungen erfunden.")
-    elif not cfg:
-        st.warning(f"Keine Makro-Zuordnung für {fund_ccy}.")
-    else:
-        rows = []
-        errors = []
-        for label, key, bullish_high in [
-            ("Leitzins / Kurzfristzins", "rate", True),
-            ("Inflation (CPI/HICP)", "inflation", False),
-        ]:
-            sid = cfg.get(key)
-            if not sid:
-                errors.append(f"{label}: keine Serien-ID")
-                continue
-            try:
-                series = get_fred_series(sid, fred_key, observation_start="2015-01-01")
-                if series.empty:
-                    raise ValueError("keine Beobachtungen")
-                latest = series.iloc[-1]
-                age = (pd.Timestamp.now().normalize() - pd.Timestamp(latest["date"]).normalize()).days
-                max_age = int(cfg.get("rate_age" if key == "rate" else "inflation_age", 120))
-                if age > max_age:
-                    raise ValueError(f"letzter Wert {latest['date'].date()}, {age} Tage alt")
-                vals = pd.to_numeric(series["value"], errors="coerce").dropna()
-                if len(vals) < 12:
-                    raise ValueError("zu wenige historische Werte")
-                median = float(vals.median())
-                current = float(latest["value"])
-                # Relative-to-own-history classification avoids comparing unrelated national levels.
-                delta = current - median
-                if abs(delta) < 0.10:
-                    bias = "NEUTRAL"
-                elif (delta > 0) == bullish_high:
-                    bias = "BULLISH"
-                else:
-                    bias = "BEARISH"
-                rows.append({"Faktor": label, "Aktueller Wert": current, "Historischer Median": median,
-                             "Abweichung zum Median": delta, "Einordnung": bias, "Datenstand": str(pd.Timestamp(latest["date"]).date()),
-                             "Alter (Tage)": age, "Serie": sid})
-            except Exception as exc:
-                errors.append(f"{label} ({sid}): {exc}")
-        if rows:
-            fdf = pd.DataFrame(rows)
-            colors = {"BULLISH":"#16a34a", "BEARISH":"#dc2626", "NEUTRAL":"#94a3b8"}
-            fdf["Punktfarbe"] = fdf["Einordnung"].map(colors)
-            fig_f = go.Figure()
-            for _, rr in fdf.iterrows():
-                fig_f.add_trace(go.Scatter(x=[rr["Abweichung zum Median"]], y=[rr["Faktor"]], mode="markers",
-                    marker=dict(size=18, color=rr["Punktfarbe"]), name=rr["Einordnung"],
-                    customdata=[[rr["Einordnung"], rr["Aktueller Wert"], rr["Historischer Median"], rr["Datenstand"]]],
-                    hovertemplate="%{y}<br>Abweichung: %{x:.3f}<br>Bias: %{customdata[0]}<br>Aktuell: %{customdata[1]:.3f}<br>Median: %{customdata[2]:.3f}<br>Datenstand: %{customdata[3]}<extra></extra>"))
-            fig_f.add_vline(x=0, line_dash="dash", line_color="gray")
-            fig_f.update_layout(title=f"Fundamentale Faktor-Punkte — {fund_ccy} allein", xaxis_title="Aktueller Wert minus eigener historischer Median", yaxis_title="Fundamentalfaktor", height=300, showlegend=False)
-            st.plotly_chart(fig_f, use_container_width=True)
-            st.dataframe(fdf[["Faktor", "Einordnung", "Aktueller Wert", "Historischer Median", "Abweichung zum Median", "Datenstand", "Alter (Tage)", "Serie"]], use_container_width=True, hide_index=True)
-            bulls = int((fdf["Einordnung"] == "BULLISH").sum())
-            bears = int((fdf["Einordnung"] == "BEARISH").sum())
-            bias = "BULLISH" if bulls > bears else ("BEARISH" if bears > bulls else "NEUTRAL")
-            a, b, c = st.columns(3)
-            a.metric(f"Makro-Bias {fund_ccy}", bias)
-            b.metric("Bullishe Faktoren", bulls)
-            c.metric("Bearishe Faktoren", bears)
-        if errors:
-            st.warning("Nicht verfügbare/veraltete Einzelwährungsdaten: " + " | ".join(errors))
-        st.caption("Interpretation: Ein im eigenen historischen Vergleich hoher Zins wird hier als carry-unterstützend gewertet; überdurchschnittliche Inflation als möglicher Gegenwind. Die Scanner-Punkte sind eine Heuristik. Für das ML-Modell werden stattdessen historische Rohzeitreihen plus Veränderungen mit konservativem Zeitversatz verwendet; die Prognosegüte muss im Holdout geprüft werden.")
-
     if st.button("Modell trainieren und Backtest ausführen", type="primary", key="run_ml_lab"):
         try:
-            with st.spinner("Historische Kurse und Makrozeitreihen laden, Features zeitlich abgleichen und testen…"):
+            with st.spinner("Historische Kurse laden, Features bauen und zeitlich testen…"):
                 raw = load_market_history(proxy["symbol"], years)
                 if not raw.empty and proxy["invert"]:
                     raw = raw.copy()
@@ -960,56 +738,6 @@ elif page == "ML Lab":
                     # Relative short/long volatility and trend persistence.
                     features["vol_ratio_5_20"] = close.pct_change().rolling(5).std() / close.pct_change().rolling(20).std()
                     features["ret_20_minus_60"] = close.pct_change(20) - close.pct_change(60)
-
-                    # Integrate historical macro data for the selected currency itself.
-                    # Observation dates are shifted forward conservatively to reduce release-date look-ahead:
-                    # policy-rate proxies +7 calendar days; CPI/HICP index proxies +45 days.
-                    # These are safety approximations, not exact release calendars / ALFRED vintages.
-                    macro_feature_names = []
-                    macro_status = "Makro-Features nicht verfügbar; technisches Modell wird verwendet."
-                    macro_cfg = MACRO_CURRENCY_SERIES.get(fund_ccy)
-                    if fred_key and macro_cfg:
-                        try:
-                            rate_hist = get_fred_series(macro_cfg["rate"], fred_key, observation_start="2000-01-01")
-                            infl_hist = get_fred_series(macro_cfg["inflation"], fred_key, observation_start="2000-01-01")
-                            if len(rate_hist) >= 6 and len(infl_hist) >= 15:
-                                rate_hist = rate_hist.sort_values("date").drop_duplicates("date").copy()
-                                rate_hist["available_date"] = pd.to_datetime(rate_hist["date"]) + pd.Timedelta(days=7)
-                                rate_hist["macro_rate_level"] = pd.to_numeric(rate_hist["value"], errors="coerce")
-                                rate_hist["macro_rate_change_3m"] = rate_hist["macro_rate_level"] - rate_hist["macro_rate_level"].shift(3)
-                                rate_merge = rate_hist[["available_date", "macro_rate_level", "macro_rate_change_3m"]].dropna(subset=["macro_rate_level"])
-
-                                infl_hist = infl_hist.sort_values("date").drop_duplicates("date").copy()
-                                infl_hist["available_date"] = pd.to_datetime(infl_hist["date"]) + pd.Timedelta(days=45)
-                                infl_hist["infl_index"] = pd.to_numeric(infl_hist["value"], errors="coerce")
-                                # CPI/HICP series are normally monthly; require a full 12-observation comparison.
-                                infl_hist["macro_inflation_yoy"] = (infl_hist["infl_index"] / infl_hist["infl_index"].shift(12) - 1.0) * 100.0
-                                infl_hist["macro_inflation_change_3m"] = infl_hist["macro_inflation_yoy"] - infl_hist["macro_inflation_yoy"].shift(3)
-                                infl_merge = infl_hist[["available_date", "macro_inflation_yoy", "macro_inflation_change_3m"]].dropna(subset=["macro_inflation_yoy"])
-
-                                market_dates = pd.DataFrame({"market_date": pd.to_datetime(features.index)}).sort_values("market_date")
-                                aligned = pd.merge_asof(market_dates, rate_merge.sort_values("available_date"),
-                                                        left_on="market_date", right_on="available_date", direction="backward")
-                                aligned = pd.merge_asof(aligned.sort_values("market_date"), infl_merge.sort_values("available_date"),
-                                                        left_on="market_date", right_on="available_date", direction="backward", suffixes=("", "_infl"))
-                                aligned.index = features.index
-                                candidate_cols = ["macro_rate_level", "macro_rate_change_3m", "macro_inflation_yoy", "macro_inflation_change_3m"]
-                                coverage = aligned[candidate_cols].notna().all(axis=1).mean()
-                                if coverage >= 0.60:
-                                    for col in candidate_cols:
-                                        features[col] = aligned[col].to_numpy()
-                                    macro_feature_names = candidate_cols
-                                    macro_status = f"Makro integriert: {fund_ccy} · 4 Features · {coverage:.0%} gemeinsame Abdeckung. Veröffentlichungslags: Zins +7 Tage, Inflation +45 Tage."
-                                else:
-                                    macro_status = f"Makro nicht ins Training übernommen: nur {coverage:.0%} gemeinsame Abdeckung (benötigt mindestens 60 %). Technisches Modell als Fallback."
-                            else:
-                                macro_status = "Makro-Historie zu kurz; technisches Modell als Fallback."
-                        except Exception as macro_exc:
-                            macro_status = f"Makroabruf fehlgeschlagen ({macro_exc}); technisches Modell als Fallback."
-                    elif not fred_key:
-                        macro_status = "Kein FRED-Key hinterlegt; technisches Modell als Fallback."
-                    st.caption(macro_status)
-
                     target_return = close.shift(-int(horizon)) / close - 1
                     dataset = features.copy()
                     dataset["target"] = (target_return > 0).astype(int)
@@ -1100,43 +828,6 @@ elif page == "ML Lab":
                             else:
                                 st.info("Der Test ist historisch besser als die genutzte Baseline, garantiert aber keine zukünftige Prognosegüte.")
                             importance = pd.DataFrame({"Feature": X.columns, "Wichtigkeit": model.feature_importances_}).sort_values("Wichtigkeit", ascending=False).head(10)
-                            st.markdown("#### ML-Faktoren-Scanner — jeder Punkt ein Modellfaktor")
-                            st.caption("Jeder Punkt steht für einen tatsächlich verwendeten Kurs-/Trend-/Volatilitäts- oder Saisonfaktor. Die Farbe zeigt, ob das Ersetzen dieses Faktors durch seinen historischen Trainingsmedian die aktuelle Modellwahrscheinlichkeit senkt oder erhöht. Das ist eine Sensitivitätsanalyse, kein kausaler Effekt. Makro, Zinsen, COT und News sind in diesem Modell noch nicht enthalten.")
-                            # One-at-a-time sensitivity: compare current probability with the
-                            # probability when one feature is set to its training median.
-                            current_row = X.iloc[[-1]].copy()
-                            current_p = float(model.predict_proba(current_row)[0, list(model.classes_).index(1)])
-                            factor_rows = []
-                            train_medians = X_train.median(numeric_only=True)
-                            for feature_name in X.columns:
-                                altered = current_row.copy()
-                                altered.loc[:, feature_name] = train_medians.get(feature_name, current_row.iloc[0][feature_name])
-                                altered_p = float(model.predict_proba(altered)[0, list(model.classes_).index(1)])
-                                delta_pp = (current_p - altered_p) * 100
-                                factor_rows.append({
-                                    "Faktor": feature_name,
-                                    "Wichtigkeit": float(model.feature_importances_[list(X.columns).index(feature_name)]),
-                                    "Sensitivität (Prozentpunkte)": delta_pp,
-                                    "Einordnung": "BULLISH" if delta_pp >= 1.0 else ("BEARISH" if delta_pp <= -1.0 else "NEUTRAL"),
-                                    "Aktueller Wert": float(current_row.iloc[0][feature_name]),
-                                })
-                            factor_df = pd.DataFrame(factor_rows)
-                            factor_df["Einflussgröße"] = factor_df["Sensitivität (Prozentpunkte)"].abs()
-                            factor_df = factor_df.sort_values("Wichtigkeit", ascending=False)
-                            dot_fig = go.Figure()
-                            for _, fr in factor_df.iterrows():
-                                color = "#16a34a" if fr["Einordnung"] == "BULLISH" else ("#dc2626" if fr["Einordnung"] == "BEARISH" else "#94a3b8")
-                                dot_fig.add_trace(go.Scatter(
-                                    x=[fr["Sensitivität (Prozentpunkte)" ]], y=[fr["Faktor"]],
-                                    mode="markers", name=fr["Einordnung"],
-                                    marker=dict(size=10 + 24 * min(float(fr["Wichtigkeit"]), 1.0), color=color),
-                                    customdata=[[fr["Wichtigkeit"], fr["Aktueller Wert"], fr["Einordnung"]]],
-                                    hovertemplate="%{y}<br>Sensitivität: %{x:.2f} pp<br>Wichtigkeit: %{customdata[0]:.3f}<br>Aktueller Wert: %{customdata[1]:.4f}<br>%{customdata[2]}<extra></extra>"
-                                ))
-                            dot_fig.add_vline(x=0, line_dash="dash", line_color="gray")
-                            dot_fig.update_layout(title="Faktor-Punkte: Einflussrichtung auf P(Aufwärts)", xaxis_title="Aktuelle P(Aufwärts) minus P(Aufwärts) nach Median-Ersatz (Prozentpunkte)", yaxis_title="Modellfaktor", height=max(400, 34 * len(factor_df)), showlegend=False)
-                            st.plotly_chart(dot_fig, use_container_width=True)
-                            st.dataframe(factor_df[["Faktor", "Einordnung", "Sensitivität (Prozentpunkte)", "Wichtigkeit", "Aktueller Wert"]], use_container_width=True, hide_index=True)
                             st.markdown("#### Welche Faktoren beeinflussen das Modell?")
                             st.dataframe(importance, use_container_width=True, hide_index=True)
                             st.markdown("#### Letzte historische Testprognosen")
@@ -1150,7 +841,7 @@ elif page == "ML Lab":
                             fig.add_hline(y=50, line_dash="dash", line_color="gray")
                             fig.update_layout(title=f"{currency} — historische Out-of-sample Wahrscheinlichkeiten ({horizon}T)", yaxis_title="P(Aufwärts) %", xaxis_title="Testdatum")
                             st.plotly_chart(fig, use_container_width=True)
-                            st.caption("Methodik: chronologischer 80/20-Holdout, Random Forest, technische Preis-/Volatilitäts-/Momentum-Features plus Monats-Saisonalität, keine zufällige Durchmischung. Brier Score, Log Loss und Kalibrierungsdiagramm werden auf dem Holdout berechnet. Der neue Faktoren-Scanner zeigt Sensitivität der aktuell verwendeten technischen und Saison-Features. Wichtig: COT, Makro/Yields und News sind noch NICHT als historische Modellfeatures eingebunden; sie dürfen daher nicht als vom Modell berücksichtigte Faktoren interpretiert werden. Transaktionskosten, Slippage und Overlapping-Horizon-Effekte sind nicht modelliert; dies ist kein handelbarer Netto-Backtest.")
+                            st.caption("Methodik: chronologischer 80/20-Holdout, Random Forest, technische Preis-/Volatilitäts-/Momentum-Features plus Monats-Saisonalität, keine zufällige Durchmischung. Brier Score, Log Loss und Kalibrierungsdiagramm werden auf dem Holdout berechnet. Wichtig: COT, Makro/Yields und News sind in dieser ML-Schätzung noch NICHT als historische Modellfeatures eingebunden; sie dürfen daher nicht als vom Modell berücksichtigte Faktoren interpretiert werden. Transaktionskosten, Slippage und Overlapping-Horizon-Effekte sind nicht modelliert; dies ist kein handelbarer Netto-Backtest.")
                         except ImportError:
                             st.error("scikit-learn fehlt. Ergänze `scikit-learn` in requirements.txt und deploye die App erneut.")
         except Exception as exc:
