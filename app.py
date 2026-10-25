@@ -41,6 +41,18 @@ a { color:#55b9ff; }
 /* Harmonised Plotly chart styling across all modules */
 .js-plotly-plot .plotly .modebar { background:transparent !important; }
 @media (max-width: 900px) { .block-container { padding: .8rem .7rem 2rem; } }
+
+/* Reference-inspired terminal accents; analysis logic remains unchanged */
+[data-testid="stSidebar"] { background:linear-gradient(180deg,#091521 0%,#07111a 100%); border-right:1px solid #1a2b3a; }
+[data-testid="stSidebar"] [role="radiogroup"] label { border-radius:8px; padding:.42rem .55rem; margin:2px 0; }
+[data-testid="stSidebar"] [role="radiogroup"] label:hover { background:#192637; }
+[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) { background:linear-gradient(100deg,#ff1744,#d90b32); }
+[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) p { color:#fff !important; font-weight:700; }
+[data-testid="stMetric"] { background:linear-gradient(145deg,#0d1b28,#0b1722); border:1px solid #1a2b3a; border-radius:13px; }
+[data-testid="stHeader"] { background:rgba(5,13,21,.9); }
+.stApp { background:radial-gradient(ellipse at 75% 0%,#102236 0%,#07111b 55%); }
+h1,h2,h3 { color:#f4f8fc; }
+.stButton > button { background:linear-gradient(100deg,#ff1744,#e90032); border:0; color:#fff; border-radius:9px; font-weight:700; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -425,6 +437,7 @@ st.caption("Forex only · Makro · COT · Saisonalität · technische Bestätigu
 st.warning("Datenstatus: Ohne konfigurierte Datenquelle werden keine aktuellen Marktmeinungen behauptet. Historische Daten sind nicht automatisch Echtzeitdaten; Anbieter, Verzögerung und Lizenzbedingungen beachten.")
 
 with st.sidebar:
+    st.markdown('<div style="display:flex;gap:10px;align-items:center;padding:4px 0 14px;border-bottom:1px solid #1a2b3a;margin-bottom:14px"><div style="width:34px;height:34px;border:3px solid #ff2447;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#ff2447;font-size:20px;font-weight:800">◇</div><div><div style="font-weight:800;font-size:16px;color:#f7fbff">MACRO / REGIME</div><div style="font-size:10px;color:#8ea6bb">FX · Makro · COT · Quant</div></div></div>', unsafe_allow_html=True)
     st.header("Einstellungen")
     page = st.radio("Modul", ["Übersicht", "FX Signal", "ML Lab", "Saisonalität", "COT / Positioning", "NQ & ES", "Quant & Regression", "Datenquellen"])
     st.divider()
