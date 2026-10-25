@@ -804,6 +804,43 @@ elif page == "ML Lab":
                             else:
                                 st.info("Der Test ist historisch besser als die genutzte Baseline, garantiert aber keine zukünftige Prognosegüte.")
                             importance = pd.DataFrame({"Feature": X.columns, "Wichtigkeit": model.feature_importances_}).sort_values("Wichtigkeit", ascending=False).head(10)
+                            st.markdown("#### ML-Faktoren-Scanner — jeder Punkt ein Modellfaktor")
+                            st.caption("Jeder Punkt steht für einen tatsächlich verwendeten Kurs-/Trend-/Volatilitäts- oder Saisonfaktor. Die Farbe zeigt, ob das Ersetzen dieses Faktors durch seinen historischen Trainingsmedian die aktuelle Modellwahrscheinlichkeit senkt oder erhöht. Das ist eine Sensitivitätsanalyse, kein kausaler Effekt. Makro, Zinsen, COT und News sind in diesem Modell noch nicht enthalten.")
+                            # One-at-a-time sensitivity: compare current probability with the
+                            # probability when one feature is set to its training median.
+                            current_row = X.iloc[[-1]].copy()
+                            current_p = float(model.predict_proba(current_row)[0, list(model.classes_).index(1)])
+                            factor_rows = []
+                            train_medians = X_train.median(numeric_only=True)
+                            for feature_name in X.columns:
+                                altered = current_row.copy()
+                                altered.loc[:, feature_name] = train_medians.get(feature_name, current_row.iloc[0][feature_name])
+                                altered_p = float(model.predict_proba(altered)[0, list(model.classes_).index(1)])
+                                delta_pp = (current_p - altered_p) * 100
+                                factor_rows.append({
+                                    "Faktor": feature_name,
+                                    "Wichtigkeit": float(model.feature_importances_[list(X.columns).index(feature_name)]),
+                                    "Sensitivität (Prozentpunkte)": delta_pp,
+                                    "Einordnung": "BULLISH" if delta_pp >= 1.0 else ("BEARISH" if delta_pp <= -1.0 else "NEUTRAL"),
+                                    "Aktueller Wert": float(current_row.iloc[0][feature_name]),
+                                })
+                            factor_df = pd.DataFrame(factor_rows)
+                            factor_df["Einflussgröße"] = factor_df["Sensitivität (Prozentpunkte)"].abs()
+                            factor_df = factor_df.sort_values("Wichtigkeit", ascending=False)
+                            dot_fig = go.Figure()
+                            for _, fr in factor_df.iterrows():
+                                color = "#16a34a" if fr["Einordnung"] == "BULLISH" else ("#dc2626" if fr["Einordnung"] == "BEARISH" else "#94a3b8")
+                                dot_fig.add_trace(go.Scatter(
+                                    x=[fr["Sensitivität (Prozentpunkte)" ]], y=[fr["Faktor"]],
+                                    mode="markers", name=fr["Einordnung"],
+                                    marker=dict(size=10 + 24 * min(float(fr["Wichtigkeit"]), 1.0), color=color),
+                                    customdata=[[fr["Wichtigkeit"], fr["Aktueller Wert"], fr["Einordnung"]]],
+                                    hovertemplate="%{y}<br>Sensitivität: %{x:.2f} pp<br>Wichtigkeit: %{customdata[0]:.3f}<br>Aktueller Wert: %{customdata[1]:.4f}<br>%{customdata[2]}<extra></extra>"
+                                ))
+                            dot_fig.add_vline(x=0, line_dash="dash", line_color="gray")
+                            dot_fig.update_layout(title="Faktor-Punkte: Einflussrichtung auf P(Aufwärts)", xaxis_title="Aktuelle P(Aufwärts) minus P(Aufwärts) nach Median-Ersatz (Prozentpunkte)", yaxis_title="Modellfaktor", height=max(400, 34 * len(factor_df)), showlegend=False)
+                            st.plotly_chart(dot_fig, use_container_width=True)
+                            st.dataframe(factor_df[["Faktor", "Einordnung", "Sensitivität (Prozentpunkte)", "Wichtigkeit", "Aktueller Wert"]], use_container_width=True, hide_index=True)
                             st.markdown("#### Welche Faktoren beeinflussen das Modell?")
                             st.dataframe(importance, use_container_width=True, hide_index=True)
                             st.markdown("#### Letzte historische Testprognosen")
@@ -817,7 +854,7 @@ elif page == "ML Lab":
                             fig.add_hline(y=50, line_dash="dash", line_color="gray")
                             fig.update_layout(title=f"{currency} — historische Out-of-sample Wahrscheinlichkeiten ({horizon}T)", yaxis_title="P(Aufwärts) %", xaxis_title="Testdatum")
                             st.plotly_chart(fig, use_container_width=True)
-                            st.caption("Methodik: chronologischer 80/20-Holdout, Random Forest, technische Preis-/Volatilitäts-/Momentum-Features plus Monats-Saisonalität, keine zufällige Durchmischung. Brier Score, Log Loss und Kalibrierungsdiagramm werden auf dem Holdout berechnet. Wichtig: COT, Makro/Yields und News sind in dieser ML-Schätzung noch NICHT als historische Modellfeatures eingebunden; sie dürfen daher nicht als vom Modell berücksichtigte Faktoren interpretiert werden. Transaktionskosten, Slippage und Overlapping-Horizon-Effekte sind nicht modelliert; dies ist kein handelbarer Netto-Backtest.")
+                            st.caption("Methodik: chronologischer 80/20-Holdout, Random Forest, technische Preis-/Volatilitäts-/Momentum-Features plus Monats-Saisonalität, keine zufällige Durchmischung. Brier Score, Log Loss und Kalibrierungsdiagramm werden auf dem Holdout berechnet. Der neue Faktoren-Scanner zeigt Sensitivität der aktuell verwendeten technischen und Saison-Features. Wichtig: COT, Makro/Yields und News sind noch NICHT als historische Modellfeatures eingebunden; sie dürfen daher nicht als vom Modell berücksichtigte Faktoren interpretiert werden. Transaktionskosten, Slippage und Overlapping-Horizon-Effekte sind nicht modelliert; dies ist kein handelbarer Netto-Backtest.")
                         except ImportError:
                             st.error("scikit-learn fehlt. Ergänze `scikit-learn` in requirements.txt und deploye die App erneut.")
         except Exception as exc:
