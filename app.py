@@ -502,6 +502,26 @@ demo_strength = pd.DataFrame({
 demo_strength["Status"] = "DEMO"
 
 if page == "Übersicht":
+    # Reference-style FX ticker strip. It only displays values from the last manual refresh;
+    # it never triggers a hidden market-data request on page load.
+    ticker_pairs = [("EUR/USD", "EUR/USD"), ("GBP/USD", "GBP/USD"), ("USD/JPY", "USD/JPY"),
+                    ("AUD/USD", "AUD/USD"), ("USD/CAD", "USD/CAD"), ("USD/CHF", "USD/CHF"), ("NZD/USD", "NZD/USD")]
+    _existing_snap = st.session_state.get("dashboard_snapshot")
+    _ticker_df = pd.DataFrame(_existing_snap["prices"]) if _existing_snap else pd.DataFrame()
+    _ticker_cols = st.columns(7, gap="small")
+    for _col, (_pair_label, _market_label) in zip(_ticker_cols, ticker_pairs):
+        _hit = _ticker_df.loc[_ticker_df["Markt"] == _market_label] if not _ticker_df.empty and "Markt" in _ticker_df else pd.DataFrame()
+        if not _hit.empty:
+            _row = _hit.iloc[0]
+            _price = pd.to_numeric(_row.get("Letzter Kurs"), errors="coerce")
+            _ret = pd.to_numeric(_row.get("20T-Rendite (%)"), errors="coerce")
+            _price_text = "—" if pd.isna(_price) else (f"{_price:.4f}" if _price < 10 else f"{_price:.3f}")
+            _ret_text = "—" if pd.isna(_ret) else f"{_ret:+.2f}% / 20T"
+            _ret_class = "positive" if pd.notna(_ret) and _ret >= 0 else "negative"
+        else:
+            _price_text, _ret_text, _ret_class = "—", "Noch nicht geladen", "muted"
+        _col.markdown(f'<div class="ticker"><div class="ticker-name">{_pair_label}</div><div class="ticker-value">{_price_text} <span class="{_ret_class}" style="float:right">{_ret_text}</span></div></div>', unsafe_allow_html=True)
+    st.write("")
     st.subheader("Zentrales Dashboard")
     st.caption("Ein gemeinsamer Überblick über FX, US-Makro und Cross-Asset-Proxys. Daten werden nur auf Knopfdruck abgerufen; Yahoo Finance ist kein garantierter Echtzeitfeed.")
     st.warning("Regime-Einschätzung ist ein transparenter Proxy aus NQ/ES/VIX und kein validiertes Handelssignal. Fehlende Daten bleiben fehlend.")
