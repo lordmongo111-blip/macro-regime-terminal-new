@@ -686,43 +686,77 @@ elif page == "ML Lab":
     years = st.selectbox("Trainingshistorie", ["5y", "10y", "max"], index=1, key="ml_years")
     st.caption(f"Referenz: {proxy['reference']}. Bei JPY/CHF/CAD wird die inverse USD-Notierung verwendet, damit steigende Werte eine stärkere ausgewählte Währung bedeuten.")
 
-    # Relative fundamental panel: explicitly separated from the price-only ML model.
-    st.markdown("#### Fundamentaler Währungspaar-Scanner — jeder Punkt ein Faktor")
-    st.caption("Vergleicht Basis- und Quotewährung anhand verfügbarer FRED-Zins- und Inflationsdaten. Das ist ein zusätzlicher fundamentaler Kontext, noch kein ML-Trainingsfeature. Fehlende/veraltete Daten werden offengelegt statt als neutral ausgegeben.")
-    pair_options = ["EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "USD/CAD", "AUD/USD", "NZD/USD", "EUR/GBP", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/CHF", "GBP/CHF", "CAD/JPY", "NZD/JPY"]
-    fund_pair = st.selectbox("Fundamentales Währungspaar", pair_options, key="ml_fund_pair")
-    fund_base, fund_quote = fund_pair.split("/")
+    # Fundamental panel for the selected currency alone (not a currency-pair comparison).
+    st.markdown("#### Fundamentaler Währungs-Scanner — jeder Punkt ein Faktor")
+    st.caption("Bewertet ausschließlich die oben ausgewählte Einzelwährung. Zins- und Inflationswerte werden gegen die eigene historische Verteilung dieser Währung eingeordnet; das ist ein transparenter Makro-Kontext, kein direkter Kausalnachweis und aktuell noch kein ML-Trainingsfeature.")
+    fund_ccy = currency.split(" — ")[0]
+    cfg = MACRO_CURRENCY_SERIES.get(fund_ccy)
     if not fred_key:
-        st.info("Für fundamentale Paar-Scores bitte links einen FRED API-Key eintragen. Ohne Key wird kein Bullish/Bearish-Score erfunden.")
+        st.info("Für fundamentale Einzelwährungsdaten bitte links einen FRED API-Key eintragen. Ohne Key werden keine Makro-Bewertungen erfunden.")
+    elif not cfg:
+        st.warning(f"Keine Makro-Zuordnung für {fund_ccy}.")
     else:
-        macro_result, macro_error = calculate_relative_macro_score(fred_key, fund_base, fund_quote)
-        if macro_error:
-            st.warning(f"Fundamentaler Score für {fund_pair} nicht verfügbar: {macro_error}")
-        else:
-            score = int(macro_result["score"])
-            macro_bias = "BULLISH" if score >= 20 else ("BEARISH" if score <= -20 else "NEUTRAL")
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Fundamentaler Bias", macro_bias)
-            m2.metric("Relativer Makro-Score", f"{score:+d}/100")
-            m3.metric("Datenmodus", macro_result["mode"])
-            st.write(macro_result["details"])
-            components = [{"Faktor":"Zinsdifferenz (Basis − Quote)", "Wert":float(macro_result["rate_diff"]), "Einordnung":"BULLISH" if macro_result["rate_diff"] > 0.25 else ("BEARISH" if macro_result["rate_diff"] < -0.25 else "NEUTRAL")}]
-            if macro_result.get("base_inflation_yoy") is not None and macro_result.get("quote_inflation_yoy") is not None:
-                infl_diff = float(macro_result["base_inflation_yoy"] - macro_result["quote_inflation_yoy"])
-                # Higher relative inflation is treated as a mild negative real-rate proxy, not as a standalone currency law.
-                components.append({"Faktor":"Inflationsdifferenz (Basis − Quote)", "Wert":infl_diff, "Einordnung":"BEARISH" if infl_diff > 0.25 else ("BULLISH" if infl_diff < -0.25 else "NEUTRAL")})
-            cdf = pd.DataFrame(components)
-            cdf["Punktfarbe"] = cdf["Einordnung"].map({"BULLISH":"#16a34a", "BEARISH":"#dc2626", "NEUTRAL":"#94a3b8"})
+        rows = []
+        errors = []
+        for label, key, bullish_high in [
+            ("Leitzins / Kurzfristzins", "rate", True),
+            ("Inflation (CPI/HICP)", "inflation", False),
+        ]:
+            sid = cfg.get(key)
+            if not sid:
+                errors.append(f"{label}: keine Serien-ID")
+                continue
+            try:
+                series = get_fred_series(sid, fred_key, observation_start="2015-01-01")
+                if series.empty:
+                    raise ValueError("keine Beobachtungen")
+                latest = series.iloc[-1]
+                age = (pd.Timestamp.now().normalize() - pd.Timestamp(latest["date"]).normalize()).days
+                max_age = int(cfg.get("rate_age" if key == "rate" else "inflation_age", 120))
+                if age > max_age:
+                    raise ValueError(f"letzter Wert {latest['date'].date()}, {age} Tage alt")
+                vals = pd.to_numeric(series["value"], errors="coerce").dropna()
+                if len(vals) < 12:
+                    raise ValueError("zu wenige historische Werte")
+                median = float(vals.median())
+                current = float(latest["value"])
+                # Relative-to-own-history classification avoids comparing unrelated national levels.
+                delta = current - median
+                if abs(delta) < 0.10:
+                    bias = "NEUTRAL"
+                elif (delta > 0) == bullish_high:
+                    bias = "BULLISH"
+                else:
+                    bias = "BEARISH"
+                rows.append({"Faktor": label, "Aktueller Wert": current, "Historischer Median": median,
+                             "Abweichung zum Median": delta, "Einordnung": bias, "Datenstand": str(pd.Timestamp(latest["date"]).date()),
+                             "Alter (Tage)": age, "Serie": sid})
+            except Exception as exc:
+                errors.append(f"{label} ({sid}): {exc}")
+        if rows:
+            fdf = pd.DataFrame(rows)
+            colors = {"BULLISH":"#16a34a", "BEARISH":"#dc2626", "NEUTRAL":"#94a3b8"}
+            fdf["Punktfarbe"] = fdf["Einordnung"].map(colors)
             fig_f = go.Figure()
-            for _, rr in cdf.iterrows():
-                fig_f.add_trace(go.Scatter(x=[rr["Wert"]], y=[rr["Faktor"]], mode="markers", marker=dict(size=18, color=rr["Punktfarbe"]), name=rr["Einordnung"], customdata=[[rr["Einordnung"]]], hovertemplate="%{y}<br>Wert: %{x:.3f}<br>%{customdata[0]}<extra></extra>"))
+            for _, rr in fdf.iterrows():
+                fig_f.add_trace(go.Scatter(x=[rr["Abweichung zum Median"]], y=[rr["Faktor"]], mode="markers",
+                    marker=dict(size=18, color=rr["Punktfarbe"]), name=rr["Einordnung"],
+                    customdata=[[rr["Einordnung"], rr["Aktueller Wert"], rr["Historischer Median"], rr["Datenstand"]]],
+                    hovertemplate="%{y}<br>Abweichung: %{x:.3f}<br>Bias: %{customdata[0]}<br>Aktuell: %{customdata[1]:.3f}<br>Median: %{customdata[2]:.3f}<br>Datenstand: %{customdata[3]}<extra></extra>"))
             fig_f.add_vline(x=0, line_dash="dash", line_color="gray")
-            fig_f.update_layout(title=f"Fundamentale Faktor-Punkte — {fund_pair}", xaxis_title="Differenz in Prozentpunkten (Basis minus Quote)", yaxis_title="Fundamentalfaktor", height=260, showlegend=False)
+            fig_f.update_layout(title=f"Fundamentale Faktor-Punkte — {fund_ccy} allein", xaxis_title="Aktueller Wert minus eigener historischer Median", yaxis_title="Fundamentalfaktor", height=300, showlegend=False)
             st.plotly_chart(fig_f, use_container_width=True)
-            st.dataframe(cdf[["Faktor", "Einordnung", "Wert"]], use_container_width=True, hide_index=True)
-            if macro_result.get("partial"):
-                st.warning("Teilbewertung: Mindestens eine Inflationsreihe fehlt oder ist veraltet. Der Score nutzt dann nur die Zinsdifferenz und ist entsprechend eingeschränkt.")
-            st.caption("Wichtig: Dieser fundamentale Score wird separat angezeigt und verändert die Kursdaten-ML-Wahrscheinlichkeit noch nicht. Dafür müssten historische Makrodaten zeitlich korrekt in jedes Trainingsdatum eingebaut werden; aktuelle Werte rückwirkend zu verwenden wäre Look-ahead-Leakage.")
+            st.dataframe(fdf[["Faktor", "Einordnung", "Aktueller Wert", "Historischer Median", "Abweichung zum Median", "Datenstand", "Alter (Tage)", "Serie"]], use_container_width=True, hide_index=True)
+            bulls = int((fdf["Einordnung"] == "BULLISH").sum())
+            bears = int((fdf["Einordnung"] == "BEARISH").sum())
+            bias = "BULLISH" if bulls > bears else ("BEARISH" if bears > bulls else "NEUTRAL")
+            a, b, c = st.columns(3)
+            a.metric(f"Makro-Bias {fund_ccy}", bias)
+            b.metric("Bullishe Faktoren", bulls)
+            c.metric("Bearishe Faktoren", bears)
+        if errors:
+            st.warning("Nicht verfügbare/veraltete Einzelwährungsdaten: " + " | ".join(errors))
+        st.caption("Interpretation: Ein im eigenen historischen Vergleich hoher Zins wird hier als carry-unterstützend gewertet; überdurchschnittliche Inflation als Gegenwind. Das ist eine einfache Heuristik, kein validierter Prognosebeweis. Die Werte fließen noch nicht in das Kurs-ML-Modell ein, da dafür zeitlich korrekte historische Makrodaten je Trainingsdatum nötig sind.")
 
     if st.button("Modell trainieren und Backtest ausführen", type="primary", key="run_ml_lab"):
         try:
