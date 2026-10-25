@@ -723,7 +723,8 @@ elif page == "ML Lab":
                         y_train, y_test = y.iloc[:split], y.iloc[split:]
                         try:
                             from sklearn.ensemble import RandomForestClassifier
-                            from sklearn.metrics import accuracy_score, balanced_accuracy_score, brier_score_loss
+                            from sklearn.metrics import accuracy_score, balanced_accuracy_score, brier_score_loss, log_loss
+                            from sklearn.calibration import calibration_curve
                             model = RandomForestClassifier(n_estimators=250, max_depth=5, min_samples_leaf=10,
                                                            class_weight="balanced_subsample", random_state=42, n_jobs=-1)
                             model.fit(X_train, y_train)
@@ -733,6 +734,10 @@ elif page == "ML Lab":
                             acc = accuracy_score(actual, pred)
                             bacc = balanced_accuracy_score(actual, pred)
                             baseline = max(float((actual == 1).mean()), float((actual == 0).mean()))
+                            brier = brier_score_loss(actual, prob_up)
+                            logloss = log_loss(actual, np.clip(prob_up, 1e-6, 1 - 1e-6), labels=[0, 1])
+                            # Calibration is measured only on the chronological holdout; bins can be noisy for small samples.
+                            frac_positive, mean_predicted = calibration_curve(actual, prob_up, n_bins=8, strategy="quantile")
                             current_prob = float(model.predict_proba(X.iloc[[-1]])[0, list(model.classes_).index(1)])
                             # Transparent directional label for the selected single currency.
                             # This ML estimate is not the validated FX Bias Engine signal.
@@ -774,9 +779,18 @@ elif page == "ML Lab":
 
                             k1,k2,k3,k4 = st.columns(4)
                             k1.metric("Modell: P(Aufwärts)", f"{current_prob:.1%}")
-                            k2.metric("Walk-forward Accuracy", f"{acc:.1%}")
+                            k2.metric("Holdout Accuracy", f"{acc:.1%}")
                             k3.metric("Balanced Accuracy", f"{bacc:.1%}")
-                            k4.metric("Naive Mehrheits-Baseline", f"{baseline:.1%}")
+                            k4.metric("Mehrheits-Baseline", f"{baseline:.1%}")
+                            c1, c2 = st.columns(2)
+                            c1.metric("Brier Score ↓", f"{brier:.3f}", help="Niedriger ist besser; 0 wäre perfekt. Bewertet die Wahrscheinlichkeiten, nicht nur die Richtung.")
+                            c2.metric("Log Loss ↓", f"{logloss:.3f}", help="Niedriger ist besser; falsche Prognosen mit hoher Sicherheit werden stärker bestraft.")
+                            cal_fig = go.Figure()
+                            cal_fig.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode="lines", line=dict(dash="dash", color="gray"), name="Perfekte Kalibrierung"))
+                            cal_fig.add_trace(go.Scatter(x=mean_predicted, y=frac_positive, mode="lines+markers", name="Holdout-Kalibrierung"))
+                            cal_fig.update_layout(title="Edge & Calibration — Zuverlässigkeit der Wahrscheinlichkeiten", xaxis_title="Mittlere prognostizierte P(Aufwärts)", yaxis_title="Tatsächlicher Anteil Aufwärts", xaxis=dict(range=[0,1], tickformat=".0%"), yaxis=dict(range=[0,1], tickformat=".0%"), height=360)
+                            st.plotly_chart(cal_fig, use_container_width=True)
+                            st.caption("Interpretation: Punkte nahe der gestrichelten Diagonale sind besser kalibriert. Die Grafik nutzt ausschließlich den chronologischen Holdout; bei wenigen Fällen je Bin ist sie instabil.")
                             st.caption(f"Testfenster: {X_test.index.min().date()} bis {X_test.index.max().date()} · {len(X_test)} Testfälle · Ziel: Rendite nach {horizon} Handelstagen > 0.")
                             if bacc <= 0.52 or bacc <= (baseline - 0.03):
                                 st.warning("Der Test zeigt keinen überzeugenden Richtungs-Vorteil gegenüber einer einfachen Baseline. Die aktuelle Wahrscheinlichkeit nicht als eigenständiges Handelssignal verwenden.")
@@ -796,7 +810,7 @@ elif page == "ML Lab":
                             fig.add_hline(y=50, line_dash="dash", line_color="gray")
                             fig.update_layout(title=f"{currency} — historische Out-of-sample Wahrscheinlichkeiten ({horizon}T)", yaxis_title="P(Aufwärts) %", xaxis_title="Testdatum")
                             st.plotly_chart(fig, use_container_width=True)
-                            st.caption("Methodik: chronologischer 80/20-Split, Random Forest, technische Preisfeatures, keine zufällige Durchmischung. Transaktionskosten, Slippage und Overlapping-Horizon-Effekte sind nicht modelliert; Wahrscheinlichkeiten sind nicht automatisch kalibriert.")
+                            st.caption("Methodik: chronologischer 80/20-Holdout (noch kein 5-Fold-Walk-forward), Random Forest und technische Preisfeatures, keine zufällige Durchmischung. Brier Score, Log Loss und Kalibrierungsdiagramm werden auf dem Holdout berechnet. Transaktionskosten, Slippage und Overlapping-Horizon-Effekte sind nicht modelliert; dies ist kein handelbarer Netto-Backtest.")
                         except ImportError:
                             st.error("scikit-learn fehlt. Ergänze `scikit-learn` in requirements.txt und deploye die App erneut.")
         except Exception as exc:
