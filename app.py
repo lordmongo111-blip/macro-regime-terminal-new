@@ -688,7 +688,7 @@ elif page == "ML Lab":
 
     # Fundamental panel for the selected currency alone (not a currency-pair comparison).
     st.markdown("#### Fundamentaler Währungs-Scanner — jeder Punkt ein Faktor")
-    st.caption("Bewertet ausschließlich die oben ausgewählte Einzelwährung. Zins- und Inflationswerte werden gegen die eigene historische Verteilung dieser Währung eingeordnet; das ist ein transparenter Makro-Kontext, kein direkter Kausalnachweis und aktuell noch kein ML-Trainingsfeature.")
+    st.caption("Bewertet ausschließlich die oben ausgewählte Einzelwährung. Zins- und Inflationszeitreihen werden mit konservativen Veröffentlichungslags zeitlich an die Kursdaten angelegt und – sofern ausreichend Historie verfügbar ist – direkt als Features im ML-Modell trainiert.")
     fund_ccy = currency.split(" — ")[0]
     cfg = MACRO_CURRENCY_SERIES.get(fund_ccy)
     if not fred_key:
@@ -756,11 +756,11 @@ elif page == "ML Lab":
             c.metric("Bearishe Faktoren", bears)
         if errors:
             st.warning("Nicht verfügbare/veraltete Einzelwährungsdaten: " + " | ".join(errors))
-        st.caption("Interpretation: Ein im eigenen historischen Vergleich hoher Zins wird hier als carry-unterstützend gewertet; überdurchschnittliche Inflation als Gegenwind. Das ist eine einfache Heuristik, kein validierter Prognosebeweis. Die Werte fließen noch nicht in das Kurs-ML-Modell ein, da dafür zeitlich korrekte historische Makrodaten je Trainingsdatum nötig sind.")
+        st.caption("Interpretation: Ein im eigenen historischen Vergleich hoher Zins wird hier als carry-unterstützend gewertet; überdurchschnittliche Inflation als möglicher Gegenwind. Die Scanner-Punkte sind eine Heuristik. Für das ML-Modell werden stattdessen historische Rohzeitreihen plus Veränderungen mit konservativem Zeitversatz verwendet; die Prognosegüte muss im Holdout geprüft werden.")
 
     if st.button("Modell trainieren und Backtest ausführen", type="primary", key="run_ml_lab"):
         try:
-            with st.spinner("Historische Kurse laden, Features bauen und zeitlich testen…"):
+            with st.spinner("Historische Kurse und Makrozeitreihen laden, Features zeitlich abgleichen und testen…"):
                 raw = load_market_history(proxy["symbol"], years)
                 if not raw.empty and proxy["invert"]:
                     raw = raw.copy()
@@ -787,6 +787,56 @@ elif page == "ML Lab":
                     # Relative short/long volatility and trend persistence.
                     features["vol_ratio_5_20"] = close.pct_change().rolling(5).std() / close.pct_change().rolling(20).std()
                     features["ret_20_minus_60"] = close.pct_change(20) - close.pct_change(60)
+
+                    # Integrate historical macro data for the selected currency itself.
+                    # Observation dates are shifted forward conservatively to reduce release-date look-ahead:
+                    # policy-rate proxies +7 calendar days; CPI/HICP index proxies +45 days.
+                    # These are safety approximations, not exact release calendars / ALFRED vintages.
+                    macro_feature_names = []
+                    macro_status = "Makro-Features nicht verfügbar; technisches Modell wird verwendet."
+                    macro_cfg = MACRO_CURRENCY_SERIES.get(fund_ccy)
+                    if fred_key and macro_cfg:
+                        try:
+                            rate_hist = get_fred_series(macro_cfg["rate"], fred_key, observation_start="2000-01-01")
+                            infl_hist = get_fred_series(macro_cfg["inflation"], fred_key, observation_start="2000-01-01")
+                            if len(rate_hist) >= 6 and len(infl_hist) >= 15:
+                                rate_hist = rate_hist.sort_values("date").drop_duplicates("date").copy()
+                                rate_hist["available_date"] = pd.to_datetime(rate_hist["date"]) + pd.Timedelta(days=7)
+                                rate_hist["macro_rate_level"] = pd.to_numeric(rate_hist["value"], errors="coerce")
+                                rate_hist["macro_rate_change_3m"] = rate_hist["macro_rate_level"] - rate_hist["macro_rate_level"].shift(3)
+                                rate_merge = rate_hist[["available_date", "macro_rate_level", "macro_rate_change_3m"]].dropna(subset=["macro_rate_level"])
+
+                                infl_hist = infl_hist.sort_values("date").drop_duplicates("date").copy()
+                                infl_hist["available_date"] = pd.to_datetime(infl_hist["date"]) + pd.Timedelta(days=45)
+                                infl_hist["infl_index"] = pd.to_numeric(infl_hist["value"], errors="coerce")
+                                # CPI/HICP series are normally monthly; require a full 12-observation comparison.
+                                infl_hist["macro_inflation_yoy"] = (infl_hist["infl_index"] / infl_hist["infl_index"].shift(12) - 1.0) * 100.0
+                                infl_hist["macro_inflation_change_3m"] = infl_hist["macro_inflation_yoy"] - infl_hist["macro_inflation_yoy"].shift(3)
+                                infl_merge = infl_hist[["available_date", "macro_inflation_yoy", "macro_inflation_change_3m"]].dropna(subset=["macro_inflation_yoy"])
+
+                                market_dates = pd.DataFrame({"market_date": pd.to_datetime(features.index)}).sort_values("market_date")
+                                aligned = pd.merge_asof(market_dates, rate_merge.sort_values("available_date"),
+                                                        left_on="market_date", right_on="available_date", direction="backward")
+                                aligned = pd.merge_asof(aligned.sort_values("market_date"), infl_merge.sort_values("available_date"),
+                                                        left_on="market_date", right_on="available_date", direction="backward", suffixes=("", "_infl"))
+                                aligned.index = features.index
+                                candidate_cols = ["macro_rate_level", "macro_rate_change_3m", "macro_inflation_yoy", "macro_inflation_change_3m"]
+                                coverage = aligned[candidate_cols].notna().all(axis=1).mean()
+                                if coverage >= 0.60:
+                                    for col in candidate_cols:
+                                        features[col] = aligned[col].to_numpy()
+                                    macro_feature_names = candidate_cols
+                                    macro_status = f"Makro integriert: {fund_ccy} · 4 Features · {coverage:.0%} gemeinsame Abdeckung. Veröffentlichungslags: Zins +7 Tage, Inflation +45 Tage."
+                                else:
+                                    macro_status = f"Makro nicht ins Training übernommen: nur {coverage:.0%} gemeinsame Abdeckung (benötigt mindestens 60 %). Technisches Modell als Fallback."
+                            else:
+                                macro_status = "Makro-Historie zu kurz; technisches Modell als Fallback."
+                        except Exception as macro_exc:
+                            macro_status = f"Makroabruf fehlgeschlagen ({macro_exc}); technisches Modell als Fallback."
+                    elif not fred_key:
+                        macro_status = "Kein FRED-Key hinterlegt; technisches Modell als Fallback."
+                    st.caption(macro_status)
+
                     target_return = close.shift(-int(horizon)) / close - 1
                     dataset = features.copy()
                     dataset["target"] = (target_return > 0).astype(int)
