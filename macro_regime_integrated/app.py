@@ -14,9 +14,33 @@ MONTHS = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt",
 
 st.markdown("""
 <style>
-.block-container {padding-top: 1.2rem; padding-bottom: 2rem;}
-[data-testid="stMetric"] {background: rgba(120,130,120,.08); padding: 12px; border-radius: 12px;}
-.small-muted {color: #7c8982; font-size: .85rem;}
+:root { color-scheme: dark; }
+.stApp { background: radial-gradient(ellipse at 78% -10%, #14253a 0%, #080d14 48%, #070b11 100%); }
+.block-container { max-width: 1800px; padding: 1.15rem 1.65rem 2.5rem; }
+[data-testid="stHeader"] { background: rgba(7,11,17,.92); }
+[data-testid="stSidebar"] { background: linear-gradient(180deg,#0b121c 0%,#101925 100%); border-right: 1px solid #1c2b3b; }
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p { color:#a8bfd3; }
+[data-testid="stSidebar"] [role="radiogroup"] label { border-radius: 8px; padding: .38rem .5rem; margin: 1px 0; }
+[data-testid="stSidebar"] [role="radiogroup"] label:hover { background:#192637; }
+h1 { letter-spacing:-.035em; font-weight:800; color:#f4f7fb; }
+h2,h3 { color:#eaf1f8; letter-spacing:-.02em; }
+p, label, .stCaption { color:#9eb2c7; }
+[data-testid="stMetric"] { background:linear-gradient(145deg,rgba(20,31,45,.96),rgba(11,18,27,.96)); border:1px solid #1d2d3e; padding:16px 17px; border-radius:13px; box-shadow:0 8px 24px rgba(0,0,0,.12); }
+[data-testid="stMetricLabel"] { color:#9db5ca !important; font-size:.82rem; }
+[data-testid="stMetricValue"] { color:#f4f7fb; font-weight:750; }
+[data-testid="stMetricDelta"] { font-weight:650; }
+[data-testid="stVerticalBlockBorderWrapper"] { border-color:#1c2b3b !important; border-radius:13px; }
+[data-testid="stAlert"] { border-radius:10px; border:1px solid #29384a; }
+.stButton > button, [data-testid="stDownloadButton"] button { background:linear-gradient(105deg,#f20d3a,#c91432); color:white; border:1px solid #ff3454; border-radius:9px; font-weight:700; min-height:2.55rem; transition:all .15s ease; }
+.stButton > button:hover, [data-testid="stDownloadButton"] button:hover { background:#ff2448; border-color:#ff526d; color:white; box-shadow:0 0 18px rgba(242,13,58,.2); }
+[data-baseweb="select"] > div, [data-baseweb="input"] > div, [data-baseweb="textarea"] > div { background:#111b28; border-color:#2a3b4f; border-radius:8px; }
+[data-testid="stDataFrame"], [data-testid="stTable"] { border:1px solid #1d2d3e; border-radius:10px; overflow:hidden; }
+hr { border-color:#203043; }
+a { color:#55b9ff; }
+.small-muted { color:#8198ad; font-size:.85rem; }
+/* Harmonised Plotly chart styling across all modules */
+.js-plotly-plot .plotly .modebar { background:transparent !important; }
+@media (max-width: 900px) { .block-container { padding: .8rem .7rem 2rem; } }
 </style>
 """, unsafe_allow_html=True)
 
