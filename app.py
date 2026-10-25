@@ -303,66 +303,89 @@ MACRO_CURRENCY_SERIES = {
 }
 
 def calculate_relative_macro_score(api_key, base_currency, quote_currency):
-    """Calculate a validated base-vs-quote macro proxy; never substitutes missing data."""
+    """Compare base and quote macro data. Rates are required; stale CPI is disclosed."""
     if base_currency not in MACRO_CURRENCY_SERIES or quote_currency not in MACRO_CURRENCY_SERIES:
         return None, f"Keine Makro-Zuordnung für {base_currency}/{quote_currency}"
     if base_currency == quote_currency:
         return None, "Basis- und Quotewährung sind identisch"
 
-    series = {}
-    requested = {}
+    loaded = {}
+    errors = []
     for currency in (base_currency, quote_currency):
         cfg = MACRO_CURRENCY_SERIES[currency]
-        for kind in ("rate", "inflation"):
-            sid = cfg[kind]
-            requested[(currency, kind)] = sid
-            if sid in series:
-                continue
-            try:
-                df = get_fred_series(sid, api_key)
-            except Exception as exc:
-                return None, f"{currency} {kind} ({sid}): {exc}"
-            if df.empty or len(df) < 13:
-                return None, f"{currency} {kind} ({sid}): zu wenige Beobachtungen"
+        # Rate series are mandatory: without both, no relative macro score is calculated.
+        sid = cfg["rate"]
+        try:
+            df = get_fred_series(sid, api_key)
+            if df.empty:
+                raise ValueError("keine Beobachtungen")
             df = df.sort_values("date").reset_index(drop=True)
             last_date = pd.Timestamp(df.iloc[-1]["date"])
             age = (pd.Timestamp.now().normalize() - last_date.normalize()).days
-            max_age = cfg["rate_age"] if kind == "rate" else cfg["inflation_age"]
-            if age < 0 or age > max_age:
-                return None, f"{currency} {kind} ({sid}): letzter Wert {last_date.date()} ist nicht aktuell genug ({age} Tage)"
-            series[sid] = df
+            if age < 0 or age > cfg["rate_age"]:
+                raise ValueError(f"letzter Wert {last_date.date()} ist {age} Tage alt")
+            loaded[(currency, "rate")] = df
+        except Exception as exc:
+            return None, f"{currency} Zinsreihe {sid} nicht verfügbar/aktuell: {exc}"
 
-    def latest_value(currency, kind):
-        return float(series[requested[(currency, kind)]].iloc[-1]["value"])
+        # Inflation is useful but some FRED/OECD CPI index series are discontinued or stale.
+        # Do not silently accept stale inflation; transparently fall back to a rate-only score.
+        inf_sid = cfg["inflation"]
+        try:
+            inf = get_fred_series(inf_sid, api_key)
+            if inf.empty or len(inf) < 13:
+                raise ValueError("zu wenige Beobachtungen")
+            inf = inf.sort_values("date").reset_index(drop=True)
+            inf_date = pd.Timestamp(inf.iloc[-1]["date"])
+            inf_age = (pd.Timestamp.now().normalize() - inf_date.normalize()).days
+            if inf_age < 0 or inf_age > cfg["inflation_age"]:
+                raise ValueError(f"letzter Wert {inf_date.date()} ist {inf_age} Tage alt")
+            loaded[(currency, "inflation")] = inf
+        except Exception as exc:
+            errors.append(f"{currency}-Inflation ({inf_sid}) nicht aktuell: {exc}")
 
-    def yoy(currency):
-        df = series[requested[(currency, "inflation")]].sort_values("date")
-        last = df.iloc[-1]
-        target = pd.Timestamp(last["date"]) - pd.DateOffset(years=1)
-        prior = df[df["date"] <= target]
-        if prior.empty or float(prior.iloc[-1]["value"]) == 0:
-            raise ValueError(f"Kein passender Vorjahreswert für {currency}-Inflation")
-        return (float(last["value"]) / float(prior.iloc[-1]["value"]) - 1) * 100
-
-    try:
-        base_rate, quote_rate = latest_value(base_currency, "rate"), latest_value(quote_currency, "rate")
-        base_infl, quote_infl = yoy(base_currency), yoy(quote_currency)
-    except Exception as exc:
-        return None, str(exc)
-
+    base_rate = float(loaded[(base_currency, "rate")].iloc[-1]["value"])
+    quote_rate = float(loaded[(quote_currency, "rate")].iloc[-1]["value"])
     rate_diff = base_rate - quote_rate
-    inflation_diff = base_infl - quote_infl
     rate_component = float(np.clip(rate_diff / 2.0 * 100, -100, 100))
-    inflation_component = float(np.clip(-inflation_diff / 2.0 * 100, -100, 100))
-    score = int(round(0.65 * rate_component + 0.35 * inflation_component))
+
+    base_infl = quote_infl = None
+    if not errors:
+        def yoy(currency):
+            df = loaded[(currency, "inflation")]
+            last = df.iloc[-1]
+            target = pd.Timestamp(last["date"]) - pd.DateOffset(years=1)
+            prior = df[df["date"] <= target]
+            if prior.empty or float(prior.iloc[-1]["value"]) == 0:
+                raise ValueError(f"Kein passender Vorjahreswert für {currency}-Inflation")
+            return (float(last["value"]) / float(prior.iloc[-1]["value"]) - 1) * 100
+        try:
+            base_infl, quote_infl = yoy(base_currency), yoy(quote_currency)
+        except Exception as exc:
+            errors.append(f"Inflationsvergleich nicht möglich: {exc}")
+
     base_label = MACRO_CURRENCY_SERIES[base_currency]["label"]
     quote_label = MACRO_CURRENCY_SERIES[quote_currency]["label"]
-    details = (f"{base_currency} ({base_label}) {base_rate:.2f}% vs. "
-               f"{quote_currency} ({quote_label}) {quote_rate:.2f}% (Differenz {rate_diff:+.2f} pp); "
-               f"Inflation YoY {base_currency} {base_infl:.2f}% vs. {quote_currency} {quote_infl:.2f}% "
-               f"(Differenz {inflation_diff:+.2f} pp). Kurzfristzinsen außerhalb USD/EUR sind Proxy-Reihen.")
+    if base_infl is not None and quote_infl is not None:
+        inflation_diff = base_infl - quote_infl
+        inflation_component = float(np.clip(-inflation_diff / 2.0 * 100, -100, 100))
+        score = int(round(0.65 * rate_component + 0.35 * inflation_component))
+        details = (f"{base_currency} ({base_label}) {base_rate:.2f}% vs. "
+                   f"{quote_currency} ({quote_label}) {quote_rate:.2f}% (Zinsdifferenz {rate_diff:+.2f} pp); "
+                   f"Inflation YoY {base_currency} {base_infl:.2f}% vs. {quote_currency} {quote_infl:.2f}% "
+                   f"(Differenz {inflation_diff:+.2f} pp).")
+        mode = "Zinsen + Inflation"
+    else:
+        score = int(round(rate_component))
+        details = (f"TEILWEISE: nur Zinsdifferenz verwendet. {base_currency} ({base_label}) "
+                   f"{base_rate:.2f}% vs. {quote_currency} ({quote_label}) {quote_rate:.2f}% "
+                   f"(Differenz {rate_diff:+.2f} pp). Inflation wurde wegen fehlender/veralteter Reihe "
+                   f"nicht verwendet. " + " | ".join(errors))
+        mode = "Nur Zinsdaten"
+
     return {"score": score, "rate_diff": rate_diff, "base_inflation_yoy": base_infl,
-            "quote_inflation_yoy": quote_infl, "details": details}, None
+            "quote_inflation_yoy": quote_infl, "details": details, "mode": mode,
+            "partial": base_infl is None or quote_infl is None}, None
 
 def calculate_eurusd_macro_score(api_key):
     """Backward-compatible wrapper for the EUR/USD relative macro score."""
