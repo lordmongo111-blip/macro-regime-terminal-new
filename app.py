@@ -288,51 +288,85 @@ def combine_fx_signal(component_scores, component_valid, technical_score):
     return {"bias": bias, "score": score, "reason": reason, "signal_quality": quality}
 
 
-def calculate_eurusd_macro_score(api_key):
-    """Relative US-vs-euro-area macro score from official FRED-hosted series.
-    Returns None if inputs are missing/stale; this is a transparent heuristic, not a forecast.
-    """
-    # FEDFUNDS is a monthly average and can legitimately lag by several weeks.
-    # ECBDFR is a daily policy-rate series; CPI/HICP are monthly releases.
-    required = {"FEDFUNDS": 75, "ECBDFR": 45, "CPIAUCSL": 75, "CP0000EZCCM086NEST": 75}
-    series = {}
-    for sid, max_age in required.items():
-        df = get_fred_series(sid, api_key)
-        if df.empty or len(df) < 13:
-            return None, f"{sid}: zu wenige Beobachtungen"
-        last_date = pd.Timestamp(df.iloc[-1]["date"])
-        age = (pd.Timestamp.now().normalize() - last_date.normalize()).days
-        if age > max_age:
-            return None, f"{sid}: letzter Wert {last_date.date()} ist zu alt ({age} Tage)"
-        series[sid] = df.sort_values("date").reset_index(drop=True)
+# FRED-hosted national/OECD series. For non-US currencies, the short-term
+# interest-rate series is a proxy (not necessarily the official policy rate).
+# CPI series are price indices; their YoY change is calculated below.
+MACRO_CURRENCY_SERIES = {
+    "USD": {"rate": "FEDFUNDS", "inflation": "CPIAUCSL", "rate_age": 100, "inflation_age": 100, "label": "US Fed funds"},
+    "EUR": {"rate": "ECBDFR", "inflation": "CP0000EZCCM086NEST", "rate_age": 60, "inflation_age": 100, "label": "EZB Einlagezins"},
+    "GBP": {"rate": "IRSTCI01GBM156N", "inflation": "GBRCPIALLMINMEI", "rate_age": 100, "inflation_age": 100, "label": "UK Kurzfristzins-Proxy"},
+    "JPY": {"rate": "IRSTCI01JPM156N", "inflation": "JPNCPIALLMINMEI", "rate_age": 100, "inflation_age": 100, "label": "Japan Kurzfristzins-Proxy"},
+    "CHF": {"rate": "IRSTCI01CHM156N", "inflation": "CHECPIALLMINMEI", "rate_age": 100, "inflation_age": 100, "label": "Schweiz Kurzfristzins-Proxy"},
+    "CAD": {"rate": "IRSTCI01CAM156N", "inflation": "CANCPIALLMINMEI", "rate_age": 100, "inflation_age": 100, "label": "Kanada Kurzfristzins-Proxy"},
+    "AUD": {"rate": "IRSTCI01AUM156N", "inflation": "AUSCPIALLMINMEI", "rate_age": 100, "inflation_age": 100, "label": "Australien Kurzfristzins-Proxy"},
+    "NZD": {"rate": "IRSTCI01NZM156N", "inflation": "NZLCPIALLMINMEI", "rate_age": 100, "inflation_age": 100, "label": "Neuseeland Kurzfristzins-Proxy"},
+}
 
-    us_rate = float(series["FEDFUNDS"].iloc[-1]["value"])
-    eu_rate = float(series["ECBDFR"].iloc[-1]["value"])
-    # CPI/HICP year-over-year: use the observation closest to 12 months earlier.
-    def yoy(df):
-        d = df.copy().sort_values("date")
-        last = d.iloc[-1]
-        target = last["date"] - pd.DateOffset(years=1)
-        prior = d[d["date"] <= target]
+def calculate_relative_macro_score(api_key, base_currency, quote_currency):
+    """Calculate a validated base-vs-quote macro proxy; never substitutes missing data."""
+    if base_currency not in MACRO_CURRENCY_SERIES or quote_currency not in MACRO_CURRENCY_SERIES:
+        return None, f"Keine Makro-Zuordnung für {base_currency}/{quote_currency}"
+    if base_currency == quote_currency:
+        return None, "Basis- und Quotewährung sind identisch"
+
+    series = {}
+    requested = {}
+    for currency in (base_currency, quote_currency):
+        cfg = MACRO_CURRENCY_SERIES[currency]
+        for kind in ("rate", "inflation"):
+            sid = cfg[kind]
+            requested[(currency, kind)] = sid
+            if sid in series:
+                continue
+            try:
+                df = get_fred_series(sid, api_key)
+            except Exception as exc:
+                return None, f"{currency} {kind} ({sid}): {exc}"
+            if df.empty or len(df) < 13:
+                return None, f"{currency} {kind} ({sid}): zu wenige Beobachtungen"
+            df = df.sort_values("date").reset_index(drop=True)
+            last_date = pd.Timestamp(df.iloc[-1]["date"])
+            age = (pd.Timestamp.now().normalize() - last_date.normalize()).days
+            max_age = cfg["rate_age"] if kind == "rate" else cfg["inflation_age"]
+            if age < 0 or age > max_age:
+                return None, f"{currency} {kind} ({sid}): letzter Wert {last_date.date()} ist nicht aktuell genug ({age} Tage)"
+            series[sid] = df
+
+    def latest_value(currency, kind):
+        return float(series[requested[(currency, kind)]].iloc[-1]["value"])
+
+    def yoy(currency):
+        df = series[requested[(currency, "inflation")]].sort_values("date")
+        last = df.iloc[-1]
+        target = pd.Timestamp(last["date"]) - pd.DateOffset(years=1)
+        prior = df[df["date"] <= target]
         if prior.empty or float(prior.iloc[-1]["value"]) == 0:
-            raise ValueError("Kein passender Vorjahreswert für Inflationsvergleich")
+            raise ValueError(f"Kein passender Vorjahreswert für {currency}-Inflation")
         return (float(last["value"]) / float(prior.iloc[-1]["value"]) - 1) * 100
-    us_infl = yoy(series["CPIAUCSL"])
-    eu_infl = yoy(series["CP0000EZCCM086NEST"])
-    rate_diff = us_rate - eu_rate
-    inflation_diff = us_infl - eu_infl
-    # Map transparent differences to bounded sub-scores.
+
+    try:
+        base_rate, quote_rate = latest_value(base_currency, "rate"), latest_value(quote_currency, "rate")
+        base_infl, quote_infl = yoy(base_currency), yoy(quote_currency)
+    except Exception as exc:
+        return None, str(exc)
+
+    rate_diff = base_rate - quote_rate
+    inflation_diff = base_infl - quote_infl
     rate_component = float(np.clip(rate_diff / 2.0 * 100, -100, 100))
     inflation_component = float(np.clip(-inflation_diff / 2.0 * 100, -100, 100))
-    # Positive score favors USD, therefore negative score favors EUR/USD (base EUR).
-    usd_macro_score = round(0.65 * rate_component + 0.35 * inflation_component)
-    eurusd_macro_score = -usd_macro_score
-    details = (f"US-Leitzins {us_rate:.2f}% vs. EZB {eu_rate:.2f}% (Differenz {rate_diff:+.2f} pp); "
-               f"US-CPI YoY {us_infl:.2f}% vs. Eurozonen-HICP YoY {eu_infl:.2f}% "
-               f"(Differenz {inflation_diff:+.2f} pp).")
-    return {"score": int(eurusd_macro_score), "rate_diff": rate_diff,
-            "us_inflation_yoy": us_infl, "eu_inflation_yoy": eu_infl,
-            "details": details}, None
+    score = int(round(0.65 * rate_component + 0.35 * inflation_component))
+    base_label = MACRO_CURRENCY_SERIES[base_currency]["label"]
+    quote_label = MACRO_CURRENCY_SERIES[quote_currency]["label"]
+    details = (f"{base_currency} ({base_label}) {base_rate:.2f}% vs. "
+               f"{quote_currency} ({quote_label}) {quote_rate:.2f}% (Differenz {rate_diff:+.2f} pp); "
+               f"Inflation YoY {base_currency} {base_infl:.2f}% vs. {quote_currency} {quote_infl:.2f}% "
+               f"(Differenz {inflation_diff:+.2f} pp). Kurzfristzinsen außerhalb USD/EUR sind Proxy-Reihen.")
+    return {"score": score, "rate_diff": rate_diff, "base_inflation_yoy": base_infl,
+            "quote_inflation_yoy": quote_infl, "details": details}, None
+
+def calculate_eurusd_macro_score(api_key):
+    """Backward-compatible wrapper for the EUR/USD relative macro score."""
+    return calculate_relative_macro_score(api_key, "EUR", "USD")
 
 def quality_percent(valid_flags):
     if not valid_flags:
@@ -395,9 +429,11 @@ elif page in ("FX Signal", "FX Macro"):
             component_valid = {"macro": False, "cot": False, "seasonality": False}
             component_scores = {}
             macro_result, macro_error = (None, "FRED API-Key fehlt")
-            if fred_key and pair == "EUR/USD":
+            if fred_key:
                 try:
-                    macro_result, macro_error = calculate_eurusd_macro_score(fred_key)
+                    macro_result, macro_error = calculate_relative_macro_score(
+                        fred_key, pair_info["base"], pair_info["quote"]
+                    )
                     if macro_result is not None:
                         component_valid["macro"] = True
                         component_scores["macro"] = macro_result["score"]
@@ -480,9 +516,9 @@ elif page in ("FX Signal", "FX Macro"):
             st.caption(
                 "Die vorläufige Richtung wird für alle auswählbaren Paare aus den jeweils verfügbaren, "
                 "validierten Nicht-Makro-Faktoren berechnet. Der finale Bias wird nur freigegeben, wenn "
-                "Makro, COT, Saisonalität und Technik vollständig validiert sind. Der relative Makrovergleich "
-                "ist in dieser Version weiterhin nur für EUR/USD implementiert; bei anderen Paaren bedeutet "
-                "NEUTRAL daher eine Daten-Sperre und nicht zwingend einen richtungslosen Markt."
+                "Makro, COT, Saisonalität und Technik vollständig validiert sind. Für die hinterlegten "
+                "Währungen wird der relative Makrovergleich aus Zins- und Inflationsreihen berechnet; "
+                "außerhalb USD/EUR dienen teils kurzfristige Zinsreihen als Proxy."
             )
             if result["bias"] == "NEUTRAL":
                 missing_names = {
@@ -505,16 +541,13 @@ elif page in ("FX Signal", "FX Macro"):
                 ) + ".")
             st.write("**Technische Prüfung:**", tech_message)
             st.write("**Kursdaten:**", price_message)
-            if pair == "EUR/USD":
-                st.markdown("#### Relativer Makro-Score (EUR gegenüber USD)")
-                if macro_result is not None:
-                    st.metric("Makro-Score EUR/USD", f"{macro_result['score']:+d} / 100")
-                    st.caption(macro_result["details"])
-                    st.caption("Heuristik: Zinsdifferenz 65%, Inflationsdifferenz 35%. Ein positiver Wert begünstigt EUR/USD; kein alleiniger Trade-Trigger.")
-                else:
-                    st.warning("Makro-Score nicht verfügbar: " + str(macro_error) + ". Prüfe FRED-Key und Serienverfügbarkeit.")
+            st.markdown(f"#### Relativer Makro-Score ({pair_info['base']} gegenüber {pair_info['quote']})")
+            if macro_result is not None:
+                st.metric(f"Makro-Score {pair}", f"{macro_result['score']:+d} / 100")
+                st.caption(macro_result["details"])
+                st.caption("Heuristik: Zinsdifferenz 65%, Inflationsdifferenz 35%. Ein positiver Wert begünstigt die Basiswährung relativ zur Quote-Währung; kein alleiniger Trade-Trigger.")
             else:
-                st.info("Relativer Makro-Score ist aktuell nur für EUR/USD implementiert; für dieses Paar wird kein Makro-Score erfunden.")
+                st.warning("Makro-Score nicht verfügbar: " + str(macro_error) + ". Prüfe FRED-Key und Serienverfügbarkeit.")
             quality_rows = [
                 {"Komponente": "FX-Kursdaten", "Status": "VALIDIERT" if price_ok else "UNGÜLTIG", "Einordnung": price_message},
                 {"Komponente": "Relatives Makro beider Währungen", "Status": "VALIDIERT" if component_valid["macro"] else "FEHLT", "Einordnung": macro_result["details"] if macro_result is not None else str(macro_error)},
