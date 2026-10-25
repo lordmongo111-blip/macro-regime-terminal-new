@@ -707,6 +707,13 @@ elif page == "ML Lab":
                         features[f"ma_gap_{window}"] = close / ma - 1
                     features["vol_20d"] = close.pct_change().rolling(20).std()
                     features["mom_60d"] = close.pct_change(60)
+                    # Calendar/seasonality features are known at forecast time (no future leakage).
+                    month = pd.Series(d.index.month, index=d.index, dtype=float)
+                    features["month_sin"] = np.sin(2 * np.pi * month / 12.0)
+                    features["month_cos"] = np.cos(2 * np.pi * month / 12.0)
+                    # Relative short/long volatility and trend persistence.
+                    features["vol_ratio_5_20"] = close.pct_change().rolling(5).std() / close.pct_change().rolling(20).std()
+                    features["ret_20_minus_60"] = close.pct_change(20) - close.pct_change(60)
                     target_return = close.shift(-int(horizon)) / close - 1
                     dataset = features.copy()
                     dataset["target"] = (target_return > 0).astype(int)
@@ -810,7 +817,7 @@ elif page == "ML Lab":
                             fig.add_hline(y=50, line_dash="dash", line_color="gray")
                             fig.update_layout(title=f"{currency} — historische Out-of-sample Wahrscheinlichkeiten ({horizon}T)", yaxis_title="P(Aufwärts) %", xaxis_title="Testdatum")
                             st.plotly_chart(fig, use_container_width=True)
-                            st.caption("Methodik: chronologischer 80/20-Holdout (noch kein 5-Fold-Walk-forward), Random Forest und technische Preisfeatures, keine zufällige Durchmischung. Brier Score, Log Loss und Kalibrierungsdiagramm werden auf dem Holdout berechnet. Transaktionskosten, Slippage und Overlapping-Horizon-Effekte sind nicht modelliert; dies ist kein handelbarer Netto-Backtest.")
+                            st.caption("Methodik: chronologischer 80/20-Holdout, Random Forest, technische Preis-/Volatilitäts-/Momentum-Features plus Monats-Saisonalität, keine zufällige Durchmischung. Brier Score, Log Loss und Kalibrierungsdiagramm werden auf dem Holdout berechnet. Wichtig: COT, Makro/Yields und News sind in dieser ML-Schätzung noch NICHT als historische Modellfeatures eingebunden; sie dürfen daher nicht als vom Modell berücksichtigte Faktoren interpretiert werden. Transaktionskosten, Slippage und Overlapping-Horizon-Effekte sind nicht modelliert; dies ist kein handelbarer Netto-Backtest.")
                         except ImportError:
                             st.error("scikit-learn fehlt. Ergänze `scikit-learn` in requirements.txt und deploye die App erneut.")
         except Exception as exc:
