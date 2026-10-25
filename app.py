@@ -14,9 +14,14 @@ MONTHS = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt",
 
 st.markdown("""
 <style>
-.block-container {padding-top: 1.2rem; padding-bottom: 2rem;}
-[data-testid="stMetric"] {background: rgba(120,130,120,.08); padding: 12px; border-radius: 12px;}
+.block-container {padding-top: 1.35rem; padding-bottom: 2.4rem; max-width: 1600px;}
+[data-testid="stMetric"] {background: rgba(120,130,120,.08); padding: 16px 18px; border: 1px solid rgba(120,130,120,.12); border-radius: 12px; min-height: 108px;}
+[data-testid="stMetricLabel"] {font-size: .82rem; letter-spacing: .02em;}
+[data-testid="stMetricValue"] {font-size: 1.7rem;}
+[data-testid="stSidebar"] {border-right: 1px solid rgba(120,130,120,.18);}
 .small-muted {color: #7c8982; font-size: .85rem;}
+[data-testid="stDataFrame"] {border-radius: 10px; overflow: hidden;}
+h1 {letter-spacing: -.025em;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -175,15 +180,9 @@ def seasonality_component_score(prices, invert=False, min_years=5):
     d = d.dropna(subset=["date", "close"]).sort_values("date")
     monthly = d.set_index("date")["close"].resample("ME").last().dropna().pct_change().dropna().to_frame("return")
     current_month = pd.Timestamp.now().month
-    sample = monthly.loc[monthly.index.month == current_month, "return"].dropna()
-    # Count distinct years, not raw rows; only one monthly return per year is valid.
-    sample = sample[~sample.index.year.duplicated(keep="last")]
+    sample = monthly.loc[monthly.index.month == current_month, "return"]
     if len(sample) < min_years:
-        years_found = ", ".join(str(y) for y in sample.index.year.tolist()) or "keine"
-        raise ValueError(
-            f"Zu wenige historische Monatsbeobachtungen ({len(sample)}/{min_years} Jahre; vorhanden: {years_found}). "
-            "Für eine belastbare Saisonanalyse werden längere Kursdaten benötigt."
-        )
+        raise ValueError(f"Zu wenige Beobachtungen für diesen Monat ({len(sample)}/{min_years} Jahre)")
     mean_return = float(sample.mean())
     # Transparent scaling: +/-2% average monthly return maps to +/-100.
     score = int(round(np.clip(mean_return / 0.02 * 100, -100, 100)))
@@ -201,12 +200,6 @@ FX_PAIRS = {
     "USD/CAD": {"symbol": "CAD=X", "base": "USD", "quote": "CAD", "cot": "6C", "cot_invert": True},
     "USD/CHF": {"symbol": "CHF=X", "base": "USD", "quote": "CHF", "cot": "6S", "cot_invert": True},
     "NZD/USD": {"symbol": "NZDUSD=X", "base": "NZD", "quote": "USD", "cot": "6N", "cot_invert": False},
-    "EUR/GBP": {"symbol": "EURGBP=X", "base": "EUR", "quote": "GBP", "cot": None, "cot_invert": False},
-    "EUR/JPY": {"symbol": "EURJPY=X", "base": "EUR", "quote": "JPY", "cot": "6J", "cot_invert": True},
-    "GBP/JPY": {"symbol": "GBPJPY=X", "base": "GBP", "quote": "JPY", "cot": "6J", "cot_invert": True},
-    "EUR/CHF": {"symbol": "EURCHF=X", "base": "EUR", "quote": "CHF", "cot": "6S", "cot_invert": True},
-    "AUD/JPY": {"symbol": "AUDJPY=X", "base": "AUD", "quote": "JPY", "cot": "6J", "cot_invert": True},
-    "CAD/JPY": {"symbol": "CADJPY=X", "base": "CAD", "quote": "JPY", "cot": "6J", "cot_invert": True},
 }
 LONG_SHORT_THRESHOLD = 20
 MAX_PRICE_AGE_DAYS = 4
@@ -292,9 +285,7 @@ def calculate_eurusd_macro_score(api_key):
     """Relative US-vs-euro-area macro score from official FRED-hosted series.
     Returns None if inputs are missing/stale; this is a transparent heuristic, not a forecast.
     """
-    # FEDFUNDS is a monthly average and can legitimately lag by several weeks.
-    # ECBDFR is a daily policy-rate series; CPI/HICP are monthly releases.
-    required = {"FEDFUNDS": 75, "ECBDFR": 45, "CPIAUCSL": 75, "CP0000EZCCM086NEST": 75}
+    required = {"FEDFUNDS": 45, "ECBDFR": 45, "CPIAUCSL": 75, "CP0000EZCCM086NEST": 75}
     series = {}
     for sid, max_age in required.items():
         df = get_fred_series(sid, api_key)
@@ -389,7 +380,7 @@ elif page in ("FX Signal", "FX Macro"):
     st.markdown("#### Datenvalidierung & Bias")
     if st.button("Echte Kursdaten laden und validieren", type="primary"):
         try:
-            price_df = load_market_history(pair_info["symbol"], "10y")
+            price_df = load_market_history(pair_info["symbol"], "2y")
             price_ok, price_message, validated_prices = validate_price_history(price_df)
             tech_score, tech_message = technical_confirmation(validated_prices) if price_ok else (None, "Technik blockiert: Kursdaten nicht validiert")
             component_valid = {"macro": False, "cot": False, "seasonality": False}
@@ -551,85 +542,82 @@ elif page in ("FX Signal", "FX Macro"):
 
 elif page == "ML Lab":
     st.subheader("ML Lab — FX-Richtungsprognose")
-    st.caption("Walk-forward-Auswertung auf historischen Kursdaten. Keine Kursgarantie; Ergebnisse sind nur so belastbar wie Daten und Testdesign.")
-    pair = st.selectbox("Währungspaar für ML", list(FX_PAIRS.keys()), key="ml_pair")
-    horizon = st.selectbox("Prognosehorizont", [10, 30, 60, 90], index=3, format_func=lambda x: f"{x} Handelstage", key="ml_horizon")
-    years = st.selectbox("Trainingshistorie", ["5y", "10y", "max"], index=1, key="ml_years")
-    if st.button("Modell trainieren und Backtest ausführen", type="primary", key="run_ml_lab"):
+    st.caption("Walk-forward-Auswertung historischer Kursdaten. Prognosen sind experimentell und keine Garantie für zukünftige Kursbewegungen.")
+    pair_label = st.selectbox("Währungspaar für ML", list(FX_PAIRS.keys()), key="ml_pair")
+    horizon = st.select_slider("Prognosehorizont", options=[1, 5, 10, 30, 60, 90], value=10, format_func=lambda x: f"{x} Handelstage")
+    history = st.selectbox("Trainingshistorie", ["5y", "10y", "max"], index=1, key="ml_history")
+    st.info("Das ML Lab nutzt ausschließlich echte historische Kurse. Die Auswertung trennt Training und Test zeitlich, damit zukünftige Daten nicht ins Training zurückleaken.")
+    if st.button("Modell trainieren und Backtest ausführen", type="primary", key="ml_run"):
         try:
-            with st.spinner("Historische Kurse laden, Features bauen und zeitlich testen…"):
-                raw = load_market_history(FX_PAIRS[pair]["symbol"], years)
-                if raw.empty or len(raw) < 500:
-                    st.error("Zu wenige Kursdaten für einen sinnvollen ML-Test (mindestens 500 Tageswerte erforderlich).")
+            from sklearn.ensemble import RandomForestClassifier
+            from sklearn.metrics import accuracy_score, balanced_accuracy_score, brier_score_loss
+            from sklearn.preprocessing import StandardScaler
+            from sklearn.pipeline import make_pipeline
+            with st.spinner("Lade Kurshistorie und berechne Walk-forward-Test…"):
+                raw = load_market_history(FX_PAIRS[pair_label]["symbol"], history)
+                valid, message, prices = validate_price_history(raw, max_age_days=MAX_PRICE_AGE_DAYS)
+                if not valid:
+                    st.error("ML-Test abgebrochen: " + message)
                 else:
-                    d = raw.copy()
-                    d["date"] = pd.to_datetime(d["date"])
-                    d = d.sort_values("date").set_index("date")
-                    close = d["close"].astype(float)
-                    features = pd.DataFrame(index=d.index)
-                    for lag in [1, 2, 5, 10, 20]:
-                        features[f"ret_{lag}d"] = close.pct_change(lag)
-                    for window in [5, 10, 20, 50, 100, 200]:
-                        ma = close.rolling(window).mean()
-                        features[f"ma_gap_{window}"] = close / ma - 1
-                    features["vol_20d"] = close.pct_change().rolling(20).std()
-                    features["mom_60d"] = close.pct_change(60)
-                    target_return = close.shift(-int(horizon)) / close - 1
-                    dataset = features.copy()
-                    dataset["target"] = (target_return > 0).astype(int)
-                    dataset["future_return"] = target_return
-                    dataset = dataset.replace([np.inf, -np.inf], np.nan).dropna()
-                    # Drop tail where the future outcome is not yet observable.
-                    dataset = dataset.iloc[:-int(horizon)]
-                    if len(dataset) < 300:
-                        st.error("Nach Feature-Bau bleiben zu wenige Beobachtungen. Bitte längere Historie oder kürzeren Horizont wählen.")
+                    d = prices.copy().sort_values("date").reset_index(drop=True)
+                    c = d["close"].astype(float)
+                    feats = pd.DataFrame(index=d.index)
+                    for lag in [1, 2, 3, 5, 10, 20]:
+                        feats[f"ret_{lag}"] = c.pct_change(lag)
+                    for win in [5, 10, 20, 50]:
+                        feats[f"vol_{win}"] = c.pct_change().rolling(win).std()
+                        feats[f"ma_gap_{win}"] = c / c.rolling(win).mean() - 1
+                    feats["momentum_60"] = c.pct_change(60)
+                    # Label is future direction over the selected horizon; final horizon rows are excluded.
+                    future_return = c.shift(-int(horizon)) / c - 1
+                    y = (future_return > 0).astype(int)
+                    data = feats.replace([np.inf, -np.inf], np.nan).join(y.rename("target")).dropna()
+                    data = data.iloc[:-int(horizon)] if len(data) > int(horizon) else data.iloc[0:0]
+                    if len(data) < 500:
+                        st.error(f"Zu wenig verwertbare Daten für einen belastbaren Test ({len(data)} Zeilen).")
                     else:
-                        split = int(len(dataset) * 0.8)
-                        X, y = dataset.drop(columns=["target", "future_return"]), dataset["target"]
-                        X_train, X_test = X.iloc[:split], X.iloc[split:]
-                        y_train, y_test = y.iloc[:split], y.iloc[split:]
-                        try:
-                            from sklearn.ensemble import RandomForestClassifier
-                            from sklearn.metrics import accuracy_score, balanced_accuracy_score, brier_score_loss
-                            model = RandomForestClassifier(n_estimators=250, max_depth=5, min_samples_leaf=10,
-                                                           class_weight="balanced_subsample", random_state=42, n_jobs=-1)
-                            model.fit(X_train, y_train)
-                            prob_up = model.predict_proba(X_test)[:, list(model.classes_).index(1)]
-                            pred = (prob_up >= 0.5).astype(int)
-                            actual = y_test.to_numpy()
-                            acc = accuracy_score(actual, pred)
-                            bacc = balanced_accuracy_score(actual, pred)
-                            baseline = max(float((actual == 1).mean()), float((actual == 0).mean()))
-                            current_prob = float(model.predict_proba(X.iloc[[-1]])[0, list(model.classes_).index(1)])
-                            k1,k2,k3,k4 = st.columns(4)
-                            k1.metric("Modell: P(Aufwärts)", f"{current_prob:.1%}")
-                            k2.metric("Walk-forward Accuracy", f"{acc:.1%}")
-                            k3.metric("Balanced Accuracy", f"{bacc:.1%}")
-                            k4.metric("Naive Mehrheits-Baseline", f"{baseline:.1%}")
-                            st.caption(f"Testfenster: {X_test.index.min().date()} bis {X_test.index.max().date()} · {len(X_test)} Testfälle · Ziel: Rendite nach {horizon} Handelstagen > 0.")
-                            if bacc <= 0.52 or bacc <= (baseline - 0.03):
-                                st.warning("Der Test zeigt keinen überzeugenden Richtungs-Vorteil gegenüber einer einfachen Baseline. Die aktuelle Wahrscheinlichkeit nicht als eigenständiges Handelssignal verwenden.")
-                            else:
-                                st.info("Der Test ist historisch besser als die genutzte Baseline, garantiert aber keine zukünftige Prognosegüte.")
-                            importance = pd.DataFrame({"Feature": X.columns, "Wichtigkeit": model.feature_importances_}).sort_values("Wichtigkeit", ascending=False).head(10)
-                            st.markdown("#### Welche Faktoren beeinflussen das Modell?")
-                            st.dataframe(importance, use_container_width=True, hide_index=True)
-                            st.markdown("#### Letzte historische Testprognosen")
-                            hist = pd.DataFrame({"P(Aufwärts)": prob_up, "Tatsächlich aufwärts": actual,
-                                                 "Modellrichtung": np.where(pred == 1, "AUFWÄRTS", "ABWÄRTS"),
-                                                 "Zielrendite": dataset.loc[X_test.index, "future_return"]})
-                            hist["P(Aufwärts)"] = hist["P(Aufwärts)"] * 100
-                            st.dataframe(hist.tail(25), use_container_width=True)
-                            fig = go.Figure()
-                            fig.add_trace(go.Scatter(x=hist.index, y=hist["P(Aufwärts)"], mode="markers", name="P(Aufwärts)"))
-                            fig.add_hline(y=50, line_dash="dash", line_color="gray")
-                            fig.update_layout(title=f"{pair} — historische Out-of-sample Wahrscheinlichkeiten ({horizon}T)", yaxis_title="P(Aufwärts) %", xaxis_title="Testdatum")
-                            st.plotly_chart(fig, use_container_width=True)
-                            st.caption("Methodik: chronologischer 80/20-Split, Random Forest, technische Preisfeatures, keine zufällige Durchmischung. Transaktionskosten, Slippage und Overlapping-Horizon-Effekte sind nicht modelliert; Wahrscheinlichkeiten sind nicht automatisch kalibriert.")
-                        except ImportError:
-                            st.error("scikit-learn fehlt. Ergänze `scikit-learn` in requirements.txt und deploye die App erneut.")
+                        split = int(len(data) * .75)
+                        X_train, X_test = data.drop(columns="target").iloc[:split], data.drop(columns="target").iloc[split:]
+                        y_train, y_test = data["target"].iloc[:split], data["target"].iloc[split:]
+                        model = RandomForestClassifier(n_estimators=250, max_depth=5, min_samples_leaf=10, class_weight="balanced", random_state=42)
+                        model.fit(X_train, y_train)
+                        pred = model.predict(X_test)
+                        prob = model.predict_proba(X_test)[:, 1]
+                        acc = accuracy_score(y_test, pred)
+                        bacc = balanced_accuracy_score(y_test, pred)
+                        brier = brier_score_loss(y_test, prob)
+                        c1,c2,c3,c4 = st.columns(4)
+                        c1.metric("Test-Trefferquote", f"{acc:.1%}")
+                        c2.metric("Balanced Accuracy", f"{bacc:.1%}")
+                        c3.metric("Brier Score", f"{brier:.3f}", help="Niedriger ist besser; 0 ist ideal.")
+                        c4.metric("Testbeobachtungen", f"{len(X_test):,}")
+                        latest_features = feats.replace([np.inf, -np.inf], np.nan).dropna().iloc[[-1]]
+                        latest = model.predict_proba(latest_features[X_train.columns])[0,1]
+                        direction = "AUFWÄRTS" if latest >= .55 else ("ABWÄRTS" if latest <= .45 else "UNKLAR")
+                        st.markdown("#### Aktuelle Modellschätzung")
+                        m1,m2 = st.columns(2)
+                        m1.metric(f"Richtung für {horizon} Handelstage", direction)
+                        m2.metric("Modellwahrscheinlichkeit aufwärts", f"{latest:.1%}")
+                        st.caption(f"Trainingsdaten: {len(X_train):,} · zeitlich nachgelagerte Testdaten: {len(X_test):,} · Kursreihe: {message}. Modell: Random Forest; Stand-alone-Test, keine Kosten/Slippage berücksichtigt.")
+                        importance = pd.DataFrame({"Faktor": X_train.columns, "Wichtigkeit": model.feature_importances_}).sort_values("Wichtigkeit", ascending=False).head(10)
+                        st.markdown("#### Welche Faktoren beeinflussen das Modell?")
+                        st.dataframe(importance, use_container_width=True, hide_index=True)
+                        st.bar_chart(importance.set_index("Faktor"))
+                        test_view = pd.DataFrame({"Datum": d.loc[data.index[split:], "date"].values, "Tatsächliche Richtung": np.where(y_test.values==1,"Aufwärts","Abwärts"), "Modellrichtung": np.where(pred==1,"Aufwärts","Abwärts"), "P(Aufwärts)": prob}).tail(20).sort_values("Datum", ascending=False)
+                        st.markdown("#### Letzte Testprognosen")
+                        st.dataframe(test_view, use_container_width=True, hide_index=True)
+                        st.warning("Wichtig: Ein einzelner Holdout-Test ist kein Beweis für Profitabilität. Vor realem Einsatz sind mehrere Walk-forward-Fenster, Transaktionskosten, Drawdown und Vergleich mit einer einfachen Benchmark nötig.")
+        except ImportError:
+            st.error("scikit-learn fehlt. Ergänze `scikit-learn` in requirements.txt und deploye die App erneut.")
         except Exception as exc:
-            st.error(f"ML Lab fehlgeschlagen: {exc}")
+            st.error(f"ML-Backtest fehlgeschlagen: {exc}")
+    else:
+        st.markdown("#### So liest du das Ergebnis")
+        a,b,c = st.columns(3)
+        a.metric("Richtung", "—", help="Wird erst nach dem Modelllauf berechnet.")
+        b.metric("Test-Trefferquote", "—", help="Noch keine Testdaten ausgewertet.")
+        c.metric("Modellgüte", "NICHT GETESTET")
+        st.caption("Noch kein Modelllauf ausgeführt. Es werden keine Beispielwerte als echte Prognose angezeigt.")
 
 elif page == "Saisonalität":
     st.subheader("Monatliche Saisonalität")
