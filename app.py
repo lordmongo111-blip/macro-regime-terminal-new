@@ -707,13 +707,6 @@ elif page == "ML Lab":
                         features[f"ma_gap_{window}"] = close / ma - 1
                     features["vol_20d"] = close.pct_change().rolling(20).std()
                     features["mom_60d"] = close.pct_change(60)
-                    # Calendar/seasonality features are known at forecast time (no future leakage).
-                    month = pd.Series(d.index.month, index=d.index, dtype=float)
-                    features["month_sin"] = np.sin(2 * np.pi * month / 12.0)
-                    features["month_cos"] = np.cos(2 * np.pi * month / 12.0)
-                    # Relative short/long volatility and trend persistence.
-                    features["vol_ratio_5_20"] = close.pct_change().rolling(5).std() / close.pct_change().rolling(20).std()
-                    features["ret_20_minus_60"] = close.pct_change(20) - close.pct_change(60)
                     target_return = close.shift(-int(horizon)) / close - 1
                     dataset = features.copy()
                     dataset["target"] = (target_return > 0).astype(int)
@@ -806,6 +799,65 @@ elif page == "ML Lab":
                             importance = pd.DataFrame({"Feature": X.columns, "Wichtigkeit": model.feature_importances_}).sort_values("Wichtigkeit", ascending=False).head(10)
                             st.markdown("#### Welche Faktoren beeinflussen das Modell?")
                             st.dataframe(importance, use_container_width=True, hide_index=True)
+
+                            # Explainable factor dots: each dot shows how the current feature value
+                            # shifts the model probability versus replacing that feature by its
+                            # training-period median. This is a local sensitivity view, not causality.
+                            st.markdown("#### Faktor-Punkte — bullish / bearish")
+                            st.caption(
+                                "Jeder Punkt steht für einen tatsächlich verwendeten Modellfaktor. "
+                                "Grün = der aktuelle Faktorwert erhöht die Modellwahrscheinlichkeit gegenüber "
+                                "dem Median der Trainingsdaten; Rot = er senkt sie. Das ist eine lokale "
+                                "Modell-Erklärung, kein Beweis für einen fundamentalen Markttreiber. "
+                                "In dieser Version nutzt das ML-Modell Kurs-/Trend-/Volatilitätsdaten; "
+                                "Makro, COT und Saisonalität sind noch keine direkten ML-Eingaben."
+                            )
+                            current_row = X.iloc[[-1]].copy()
+                            train_medians = X_train.median(numeric_only=True)
+                            factor_rows = []
+                            for feature_name in X.columns:
+                                counterfactual = current_row.copy()
+                                counterfactual.loc[counterfactual.index[0], feature_name] = train_medians[feature_name]
+                                counterfactual_prob = float(
+                                    model.predict_proba(counterfactual)[0, list(model.classes_).index(1)]
+                                )
+                                effect_pp = (current_prob - counterfactual_prob) * 100
+                                factor_rows.append({
+                                    "Faktor": feature_name,
+                                    "Effekt auf P(Aufwärts) (Prozentpunkte)": effect_pp,
+                                    "Einordnung": "BULLISH" if effect_pp > 0.1 else ("BEARISH" if effect_pp < -0.1 else "NEUTRAL")
+                                })
+                            factor_frame = pd.DataFrame(factor_rows)
+                            factor_frame["Absoluter Effekt"] = factor_frame["Effekt auf P(Aufwärts) (Prozentpunkte)"].abs()
+                            factor_frame = factor_frame.sort_values("Absoluter Effekt", ascending=False).head(12)
+                            factor_frame = factor_frame.sort_values("Effekt auf P(Aufwärts) (Prozentpunkte)")
+                            factor_colors = [
+                                "#22c55e" if value > 0.1 else "#ef4444" if value < -0.1 else "#94a3b8"
+                                for value in factor_frame["Effekt auf P(Aufwärts) (Prozentpunkte)"]
+                            ]
+                            factor_fig = go.Figure()
+                            factor_fig.add_trace(go.Scatter(
+                                x=factor_frame["Effekt auf P(Aufwärts) (Prozentpunkte)"],
+                                y=factor_frame["Faktor"],
+                                mode="markers",
+                                marker=dict(size=13, color=factor_colors),
+                                text=factor_frame["Einordnung"],
+                                hovertemplate="%{y}<br>Effekt: %{x:.2f} Prozentpunkte<br>%{text}<extra></extra>",
+                                name="Faktoreffekt"
+                            ))
+                            factor_fig.add_vline(x=0, line_dash="dash", line_color="gray")
+                            factor_fig.update_layout(
+                                title="Ein Punkt je Modellfaktor",
+                                xaxis_title="Veränderung von P(Aufwärts) gegenüber Median-Referenz (Prozentpunkte)",
+                                yaxis_title="Modellfaktor",
+                                height=420,
+                                showlegend=False
+                            )
+                            st.plotly_chart(factor_fig, use_container_width=True)
+                            st.dataframe(
+                                factor_frame[["Faktor", "Einordnung", "Effekt auf P(Aufwärts) (Prozentpunkte)"]],
+                                use_container_width=True, hide_index=True
+                            )
                             st.markdown("#### Letzte historische Testprognosen")
                             hist = pd.DataFrame({"P(Aufwärts)": prob_up, "Tatsächlich aufwärts": actual,
                                                  "Modellrichtung": np.where(pred == 1, "AUFWÄRTS", "ABWÄRTS"),
@@ -817,7 +869,7 @@ elif page == "ML Lab":
                             fig.add_hline(y=50, line_dash="dash", line_color="gray")
                             fig.update_layout(title=f"{currency} — historische Out-of-sample Wahrscheinlichkeiten ({horizon}T)", yaxis_title="P(Aufwärts) %", xaxis_title="Testdatum")
                             st.plotly_chart(fig, use_container_width=True)
-                            st.caption("Methodik: chronologischer 80/20-Holdout, Random Forest, technische Preis-/Volatilitäts-/Momentum-Features plus Monats-Saisonalität, keine zufällige Durchmischung. Brier Score, Log Loss und Kalibrierungsdiagramm werden auf dem Holdout berechnet. Wichtig: COT, Makro/Yields und News sind in dieser ML-Schätzung noch NICHT als historische Modellfeatures eingebunden; sie dürfen daher nicht als vom Modell berücksichtigte Faktoren interpretiert werden. Transaktionskosten, Slippage und Overlapping-Horizon-Effekte sind nicht modelliert; dies ist kein handelbarer Netto-Backtest.")
+                            st.caption("Methodik: chronologischer 80/20-Holdout (noch kein 5-Fold-Walk-forward), Random Forest und technische Preisfeatures, keine zufällige Durchmischung. Brier Score, Log Loss und Kalibrierungsdiagramm werden auf dem Holdout berechnet. Transaktionskosten, Slippage und Overlapping-Horizon-Effekte sind nicht modelliert; dies ist kein handelbarer Netto-Backtest.")
                         except ImportError:
                             st.error("scikit-learn fehlt. Ergänze `scikit-learn` in requirements.txt und deploye die App erneut.")
         except Exception as exc:
