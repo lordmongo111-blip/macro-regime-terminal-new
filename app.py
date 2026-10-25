@@ -201,6 +201,12 @@ FX_PAIRS = {
     "USD/CAD": {"symbol": "CAD=X", "base": "USD", "quote": "CAD", "cot": "6C", "cot_invert": True},
     "USD/CHF": {"symbol": "CHF=X", "base": "USD", "quote": "CHF", "cot": "6S", "cot_invert": True},
     "NZD/USD": {"symbol": "NZDUSD=X", "base": "NZD", "quote": "USD", "cot": "6N", "cot_invert": False},
+    "EUR/GBP": {"symbol": "EURGBP=X", "base": "EUR", "quote": "GBP", "cot": None, "cot_invert": False},
+    "EUR/JPY": {"symbol": "EURJPY=X", "base": "EUR", "quote": "JPY", "cot": "6J", "cot_invert": True},
+    "GBP/JPY": {"symbol": "GBPJPY=X", "base": "GBP", "quote": "JPY", "cot": "6J", "cot_invert": True},
+    "EUR/CHF": {"symbol": "EURCHF=X", "base": "EUR", "quote": "CHF", "cot": "6S", "cot_invert": True},
+    "AUD/JPY": {"symbol": "AUDJPY=X", "base": "AUD", "quote": "JPY", "cot": "6J", "cot_invert": True},
+    "CAD/JPY": {"symbol": "CADJPY=X", "base": "CAD", "quote": "JPY", "cot": "6J", "cot_invert": True},
 }
 LONG_SHORT_THRESHOLD = 20
 MAX_PRICE_AGE_DAYS = 4
@@ -339,7 +345,7 @@ st.warning("Datenstatus: Ohne konfigurierte Datenquelle werden keine aktuellen M
 
 with st.sidebar:
     st.header("Einstellungen")
-    page = st.radio("Modul", ["Übersicht", "FX Signal", "Saisonalität", "COT / Positioning", "NQ & ES", "Quant & Regression", "Datenquellen"])
+    page = st.radio("Modul", ["Übersicht", "FX Signal", "ML Lab", "Saisonalität", "COT / Positioning", "NQ & ES", "Quant & Regression", "Datenquellen"])
     st.divider()
     try:
         saved_fred_key = st.secrets.get("FRED_API_KEY", "")
@@ -435,70 +441,6 @@ elif page in ("FX Signal", "FX Macro"):
             c3.metric("Datenqualität", f"{q_data}%")
             c4.metric("Signalqualität", result["signal_quality"])
             st.info(result["reason"])
-
-            # Explainable signal breakdown: show what each component contributes,
-            # in pair-direction terms, and why the final bias was selected/blocked.
-            st.markdown("#### Warum ist dieses Währungspaar bullish oder bearish?")
-            weights = {"macro": 0.40, "cot": 0.25, "seasonality": 0.10, "technical": 0.25}
-            component_labels = {
-                "macro": "Relatives Makro",
-                "cot": "COT / Positionierung",
-                "seasonality": "Saisonalität",
-                "technical": "Technik / Trend"
-            }
-            explain_rows = []
-            for key in ("macro", "cot", "seasonality"):
-                label = component_labels[key]
-                if component_valid.get(key, False) and key in component_scores:
-                    value = float(component_scores[key])
-                    contribution = value * weights[key]
-                    direction_text = "bullish für " + pair if value > 0 else ("bearish für " + pair if value < 0 else "neutral")
-                    explain_rows.append({
-                        "Faktor": label,
-                        "Score": f"{value:+.0f} / 100",
-                        "Gewicht": f"{weights[key]*100:.0f}%",
-                        "Beitrag zum Gesamtscore": f"{contribution:+.1f}",
-                        "Interpretation": f"{direction_text}; " + (
-                            f"stützt das Signal mit {contribution:+.1f} Punkten." if contribution != 0 else "liefert aktuell keinen Richtungsbeitrag."
-                        )
-                    })
-                else:
-                    missing_reason = {"macro": macro_error, "cot": cot_error, "seasonality": season_error}.get(key, "nicht verfügbar")
-                    explain_rows.append({
-                        "Faktor": label, "Score": "FEHLT", "Gewicht": f"{weights[key]*100:.0f}%",
-                        "Beitrag zum Gesamtscore": "nicht berechnet",
-                        "Interpretation": f"Nicht berücksichtigt/freigegeben: {missing_reason}"
-                    })
-            if tech_score is not None:
-                tech_value = 100 * float(tech_score)
-                tech_contribution = tech_value * weights["technical"]
-                tech_direction = "bullish für " + pair if tech_value > 0 else ("bearish für " + pair if tech_value < 0 else "neutral")
-                tech_interpretation = f"{tech_direction}; {tech_message}. Gewichteter Beitrag: {tech_contribution:+.1f} Punkte."
-            else:
-                tech_value, tech_contribution = None, None
-                tech_interpretation = f"Nicht validiert: {tech_message}"
-            explain_rows.append({
-                "Faktor": component_labels["technical"],
-                "Score": f"{tech_value:+.0f} / 100" if tech_value is not None else "FEHLT",
-                "Gewicht": f"{weights['technical']*100:.0f}%",
-                "Beitrag zum Gesamtscore": f"{tech_contribution:+.1f}" if tech_contribution is not None else "nicht berechnet",
-                "Interpretation": tech_interpretation
-            })
-            st.dataframe(pd.DataFrame(explain_rows), use_container_width=True, hide_index=True)
-            if result["score"] is not None:
-                st.markdown(f"**Gesamteinordnung:** Score **{result['score']:+d}/100**. "
-                            f"Die Regel verlangt einen Score ab +{LONG_SHORT_THRESHOLD} für LONG bzw. "
-                            f"≤ −{LONG_SHORT_THRESHOLD} für SHORT und eine passende technische Bestätigung.")
-            if result["bias"] == "SHORT":
-                st.warning("Warum SHORT? Der gewichtete Score liegt unter der Short-Schwelle und die technische Bestätigung ist bearish. "
-                           "Prüfe besonders, ob Makro- und COT-Scores korrekt auf die Basiswährung gegenüber der Kurswährung ausgerichtet sind.")
-            elif result["bias"] == "LONG":
-                st.success("Warum LONG? Der gewichtete Score liegt über der Long-Schwelle und die technische Bestätigung ist bullish. "
-                           "Prüfe, ob alle Teil-Scores dieselbe Paar-Richtung verwenden.")
-            else:
-                st.info("Warum NEUTRAL? Mindestens eine Pflichtkomponente kann fehlen, der Score kann innerhalb der Schwelle liegen "
-                        "oder die technische Bestätigung passt nicht zur Score-Richtung.")
-            st.caption("Gewichte: Makro 40 %, COT 25 %, Saisonalität 10 %, Technik 25 %. Beiträge sind gewichtete Teil-Scores, keine Erfolgswahrscheinlichkeiten.")
             st.write("**Technische Prüfung:**", tech_message)
             st.write("**Kursdaten:**", price_message)
             if pair == "EUR/USD":
@@ -606,6 +548,88 @@ elif page in ("FX Signal", "FX Macro"):
         ["NZD", "Nicht verbunden", "RBNZ-/Stats NZ-Serien separat integrieren"],
     ], columns=["CCY", "Status", "Hinweis"])
     st.dataframe(coverage, use_container_width=True, hide_index=True)
+
+elif page == "ML Lab":
+    st.subheader("ML Lab — FX-Richtungsprognose")
+    st.caption("Walk-forward-Auswertung auf historischen Kursdaten. Keine Kursgarantie; Ergebnisse sind nur so belastbar wie Daten und Testdesign.")
+    pair = st.selectbox("Währungspaar für ML", list(FX_PAIRS.keys()), key="ml_pair")
+    horizon = st.selectbox("Prognosehorizont", [10, 30, 60, 90], index=3, format_func=lambda x: f"{x} Handelstage", key="ml_horizon")
+    years = st.selectbox("Trainingshistorie", ["5y", "10y", "max"], index=1, key="ml_years")
+    if st.button("Modell trainieren und Backtest ausführen", type="primary", key="run_ml_lab"):
+        try:
+            with st.spinner("Historische Kurse laden, Features bauen und zeitlich testen…"):
+                raw = load_market_history(FX_PAIRS[pair]["symbol"], years)
+                if raw.empty or len(raw) < 500:
+                    st.error("Zu wenige Kursdaten für einen sinnvollen ML-Test (mindestens 500 Tageswerte erforderlich).")
+                else:
+                    d = raw.copy()
+                    d["date"] = pd.to_datetime(d["date"])
+                    d = d.sort_values("date").set_index("date")
+                    close = d["close"].astype(float)
+                    features = pd.DataFrame(index=d.index)
+                    for lag in [1, 2, 5, 10, 20]:
+                        features[f"ret_{lag}d"] = close.pct_change(lag)
+                    for window in [5, 10, 20, 50, 100, 200]:
+                        ma = close.rolling(window).mean()
+                        features[f"ma_gap_{window}"] = close / ma - 1
+                    features["vol_20d"] = close.pct_change().rolling(20).std()
+                    features["mom_60d"] = close.pct_change(60)
+                    target_return = close.shift(-int(horizon)) / close - 1
+                    dataset = features.copy()
+                    dataset["target"] = (target_return > 0).astype(int)
+                    dataset["future_return"] = target_return
+                    dataset = dataset.replace([np.inf, -np.inf], np.nan).dropna()
+                    # Drop tail where the future outcome is not yet observable.
+                    dataset = dataset.iloc[:-int(horizon)]
+                    if len(dataset) < 300:
+                        st.error("Nach Feature-Bau bleiben zu wenige Beobachtungen. Bitte längere Historie oder kürzeren Horizont wählen.")
+                    else:
+                        split = int(len(dataset) * 0.8)
+                        X, y = dataset.drop(columns=["target", "future_return"]), dataset["target"]
+                        X_train, X_test = X.iloc[:split], X.iloc[split:]
+                        y_train, y_test = y.iloc[:split], y.iloc[split:]
+                        try:
+                            from sklearn.ensemble import RandomForestClassifier
+                            from sklearn.metrics import accuracy_score, balanced_accuracy_score, brier_score_loss
+                            model = RandomForestClassifier(n_estimators=250, max_depth=5, min_samples_leaf=10,
+                                                           class_weight="balanced_subsample", random_state=42, n_jobs=-1)
+                            model.fit(X_train, y_train)
+                            prob_up = model.predict_proba(X_test)[:, list(model.classes_).index(1)]
+                            pred = (prob_up >= 0.5).astype(int)
+                            actual = y_test.to_numpy()
+                            acc = accuracy_score(actual, pred)
+                            bacc = balanced_accuracy_score(actual, pred)
+                            baseline = max(float((actual == 1).mean()), float((actual == 0).mean()))
+                            current_prob = float(model.predict_proba(X.iloc[[-1]])[0, list(model.classes_).index(1)])
+                            k1,k2,k3,k4 = st.columns(4)
+                            k1.metric("Modell: P(Aufwärts)", f"{current_prob:.1%}")
+                            k2.metric("Walk-forward Accuracy", f"{acc:.1%}")
+                            k3.metric("Balanced Accuracy", f"{bacc:.1%}")
+                            k4.metric("Naive Mehrheits-Baseline", f"{baseline:.1%}")
+                            st.caption(f"Testfenster: {X_test.index.min().date()} bis {X_test.index.max().date()} · {len(X_test)} Testfälle · Ziel: Rendite nach {horizon} Handelstagen > 0.")
+                            if bacc <= 0.52 or bacc <= (baseline - 0.03):
+                                st.warning("Der Test zeigt keinen überzeugenden Richtungs-Vorteil gegenüber einer einfachen Baseline. Die aktuelle Wahrscheinlichkeit nicht als eigenständiges Handelssignal verwenden.")
+                            else:
+                                st.info("Der Test ist historisch besser als die genutzte Baseline, garantiert aber keine zukünftige Prognosegüte.")
+                            importance = pd.DataFrame({"Feature": X.columns, "Wichtigkeit": model.feature_importances_}).sort_values("Wichtigkeit", ascending=False).head(10)
+                            st.markdown("#### Welche Faktoren beeinflussen das Modell?")
+                            st.dataframe(importance, use_container_width=True, hide_index=True)
+                            st.markdown("#### Letzte historische Testprognosen")
+                            hist = pd.DataFrame({"P(Aufwärts)": prob_up, "Tatsächlich aufwärts": actual,
+                                                 "Modellrichtung": np.where(pred == 1, "AUFWÄRTS", "ABWÄRTS"),
+                                                 "Zielrendite": dataset.loc[X_test.index, "future_return"]})
+                            hist["P(Aufwärts)"] = hist["P(Aufwärts)"] * 100
+                            st.dataframe(hist.tail(25), use_container_width=True)
+                            fig = go.Figure()
+                            fig.add_trace(go.Scatter(x=hist.index, y=hist["P(Aufwärts)"], mode="markers", name="P(Aufwärts)"))
+                            fig.add_hline(y=50, line_dash="dash", line_color="gray")
+                            fig.update_layout(title=f"{pair} — historische Out-of-sample Wahrscheinlichkeiten ({horizon}T)", yaxis_title="P(Aufwärts) %", xaxis_title="Testdatum")
+                            st.plotly_chart(fig, use_container_width=True)
+                            st.caption("Methodik: chronologischer 80/20-Split, Random Forest, technische Preisfeatures, keine zufällige Durchmischung. Transaktionskosten, Slippage und Overlapping-Horizon-Effekte sind nicht modelliert; Wahrscheinlichkeiten sind nicht automatisch kalibriert.")
+                        except ImportError:
+                            st.error("scikit-learn fehlt. Ergänze `scikit-learn` in requirements.txt und deploye die App erneut.")
+        except Exception as exc:
+            st.error(f"ML Lab fehlgeschlagen: {exc}")
 
 elif page == "Saisonalität":
     st.subheader("Monatliche Saisonalität")
