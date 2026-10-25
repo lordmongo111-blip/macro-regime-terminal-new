@@ -448,7 +448,32 @@ elif page in ("FX Signal", "FX Macro"):
                 st.error(f"Einordnung für {pair}: SHORT bedeutet, dass die Basiswährung ({pair_info['base']}) gegenüber der Kurswährung ({pair_info['quote']}) schwächer eingeschätzt wird.")
             else:
                 st.info(f"Einordnung für {pair}: NEUTRAL — aktuell kein freigegebenes LONG-/SHORT-Signal. Fehlende oder nicht bestätigte Faktoren werden nicht durch Schätzwerte ersetzt.")
-            st.caption("Richtungslogik gilt für alle Paare im Auswahlfeld. LONG/SHORT wird nur freigegeben, wenn Makro, COT, Saisonalität und Technik für das ausgewählte Paar validiert sind. Derzeit ist der relative Makro-Score nur für EUR/USD verbunden; andere Paare bleiben deshalb bis zur Integration ihrer Makrodaten typischerweise NEUTRAL.")
+            st.caption(
+                "Wichtig: Die Signalregeln gelten für alle Paare im Auswahlfeld. Ein LONG-/SHORT-Signal "
+                "wird aber nur freigegeben, wenn Makro, COT, Saisonalität und Technik für genau dieses Paar "
+                "validiert sind. Im aktuellen Build ist der relative Makrovergleich nur für EUR/USD "
+                "implementiert. Bei GBP/USD, USD/JPY und den übrigen Paaren ist NEUTRAL deshalb eine "
+                "bewusste Daten-Sperre – nicht die Aussage, dass der Markt tatsächlich richtungslos ist."
+            )
+            if result["bias"] == "NEUTRAL":
+                missing_names = {
+                    "macro": "relativer Makrovergleich fehlt oder ist veraltet",
+                    "cot": "COT-Positionierung fehlt oder ist nicht frisch",
+                    "seasonality": "Saisonalität ist nicht ausreichend belegt",
+                }
+                missing_readable = [
+                    missing_names.get(name, name)
+                    for name in ("macro", "cot", "seasonality")
+                    if not component_valid.get(name, False)
+                ]
+                if tech_score is None:
+                    missing_readable.append("technische Daten sind nicht validiert")
+                elif tech_score == 0:
+                    missing_readable.append("Technik bestätigt weder bullish noch bearish")
+                st.info("Warum NEUTRAL? " + (
+                    "; ".join(missing_readable) if missing_readable
+                    else "Der gewichtete Score erreicht die Schwelle nicht oder Technik bestätigt die Richtung nicht."
+                ) + ".")
             st.write("**Technische Prüfung:**", tech_message)
             st.write("**Kursdaten:**", price_message)
             if pair == "EUR/USD":
@@ -624,6 +649,44 @@ elif page == "ML Lab":
                             bacc = balanced_accuracy_score(actual, pred)
                             baseline = max(float((actual == 1).mean()), float((actual == 0).mean()))
                             current_prob = float(model.predict_proba(X.iloc[[-1]])[0, list(model.classes_).index(1)])
+                            # Transparent directional label for the selected single currency.
+                            # This ML estimate is not the validated FX Bias Engine signal.
+                            if current_prob >= 0.55:
+                                ml_bias = "BULLISH"
+                                ml_explanation = (
+                                    f"Das Modell schätzt die Wahrscheinlichkeit einer positiven "
+                                    f"{horizon}-Tage-Rendite auf {current_prob:.1%}. Das liegt mindestens "
+                                    "5 Prozentpunkte über 50 % und spricht im Modell für Aufwärtsdruck."
+                                )
+                            elif current_prob <= 0.45:
+                                ml_bias = "BEARISH"
+                                ml_explanation = (
+                                    f"Das Modell schätzt die Wahrscheinlichkeit einer positiven "
+                                    f"{horizon}-Tage-Rendite auf {current_prob:.1%}. Das liegt mindestens "
+                                    "5 Prozentpunkte unter 50 % und spricht im Modell für Abwärtsdruck."
+                                )
+                            else:
+                                ml_bias = "NEUTRAL"
+                                ml_explanation = (
+                                    f"Mit {current_prob:.1%} liegt die Modellwahrscheinlichkeit nahe an 50 %. "
+                                    "Die Richtung ist damit nicht deutlich genug, um bullish oder bearish zu nennen."
+                                )
+                            st.markdown("#### Aktuelle ML-Einschätzung")
+                            b1, b2, b3 = st.columns(3)
+                            b1.metric("Richtung", ml_bias)
+                            b2.metric("P(Aufwärts)", f"{current_prob:.1%}")
+                            b3.metric("Prognosehorizont", f"{horizon} Handelstage")
+                            if ml_bias == "BULLISH":
+                                st.success(ml_explanation)
+                            elif ml_bias == "BEARISH":
+                                st.error(ml_explanation)
+                            else:
+                                st.info(ml_explanation)
+                            st.caption(
+                                "Die ML-Richtung beschreibt die einzelne ausgewählte Währung gegenüber ihrer "
+                                "Referenz. Sie ist kein freigegebenes LONG-/SHORT-Signal des FX Bias Engine."
+                            )
+
                             k1,k2,k3,k4 = st.columns(4)
                             k1.metric("Modell: P(Aufwärts)", f"{current_prob:.1%}")
                             k2.metric("Walk-forward Accuracy", f"{acc:.1%}")
