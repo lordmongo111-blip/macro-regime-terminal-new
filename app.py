@@ -441,6 +441,35 @@ elif page in ("FX Signal", "FX Macro"):
             c3.metric("Datenqualität", f"{q_data}%")
             c4.metric("Signalqualität", result["signal_quality"])
             st.info(result["reason"])
+            # Separate provisional market direction from the fully validated signal.
+            # This helps every pair show the available evidence without pretending
+            # that missing relative macro data has been validated.
+            provisional_parts = []
+            provisional_weights = []
+            if component_valid.get("cot") and "cot" in component_scores:
+                provisional_parts.append(0.45 * component_scores["cot"])
+                provisional_weights.append(0.45)
+            if component_valid.get("seasonality") and "seasonality" in component_scores:
+                provisional_parts.append(0.15 * component_scores["seasonality"])
+                provisional_weights.append(0.15)
+            if tech_score is not None:
+                provisional_parts.append(0.40 * (100 * tech_score))
+                provisional_weights.append(0.40)
+            st.markdown("#### Vorläufige Richtung (verfügbare Daten, noch kein bestätigtes Handelssignal)")
+            if provisional_weights:
+                provisional_score = int(round(sum(provisional_parts) / sum(provisional_weights)))
+                if provisional_score >= LONG_SHORT_THRESHOLD and tech_score == 1:
+                    provisional_bias = "BULLISH / LONG-TENDENZ"
+                    st.success(f"{provisional_bias} · Score {provisional_score:+d}/100. COT, Saisonalität und Technik soweit verfügbar; Makrovergleich fehlt ggf. noch.")
+                elif provisional_score <= -LONG_SHORT_THRESHOLD and tech_score == -1:
+                    provisional_bias = "BEARISH / SHORT-TENDENZ"
+                    st.error(f"{provisional_bias} · Score {provisional_score:+d}/100. COT, Saisonalität und Technik soweit verfügbar; Makrovergleich fehlt ggf. noch.")
+                else:
+                    provisional_bias = "NEUTRAL"
+                    st.info(f"{provisional_bias} · Score {provisional_score:+d}/100. Die verfügbaren Faktoren zeigen keine ausreichend bestätigte Richtung.")
+                st.caption("Diese vorläufige Richtung ersetzt nicht den finalen Bias. Der finale LONG/SHORT-Status bleibt gesperrt, solange erforderliche Makro-, COT-, Saison- oder Technikdaten fehlen bzw. nicht validiert sind.")
+            else:
+                st.warning("Vorläufige Richtung nicht bewertbar: Es liegen noch keine validierten COT-, Saison- oder Technikwerte vor.")
             # Explain the direction consistently for every selectable FX pair.
             if result["bias"] == "LONG":
                 st.success(f"Einordnung für {pair}: LONG bedeutet, dass die Basiswährung ({pair_info['base']}) gegenüber der Kurswährung ({pair_info['quote']}) bevorzugt wird. Das ist nur ein validiertes Setup, keine Garantie.")
@@ -449,11 +478,11 @@ elif page in ("FX Signal", "FX Macro"):
             else:
                 st.info(f"Einordnung für {pair}: NEUTRAL — aktuell kein freigegebenes LONG-/SHORT-Signal. Fehlende oder nicht bestätigte Faktoren werden nicht durch Schätzwerte ersetzt.")
             st.caption(
-                "Wichtig: Die Signalregeln gelten für alle Paare im Auswahlfeld. Ein LONG-/SHORT-Signal "
-                "wird aber nur freigegeben, wenn Makro, COT, Saisonalität und Technik für genau dieses Paar "
-                "validiert sind. Im aktuellen Build ist der relative Makrovergleich nur für EUR/USD "
-                "implementiert. Bei GBP/USD, USD/JPY und den übrigen Paaren ist NEUTRAL deshalb eine "
-                "bewusste Daten-Sperre – nicht die Aussage, dass der Markt tatsächlich richtungslos ist."
+                "Die vorläufige Richtung wird für alle auswählbaren Paare aus den jeweils verfügbaren, "
+                "validierten Nicht-Makro-Faktoren berechnet. Der finale Bias wird nur freigegeben, wenn "
+                "Makro, COT, Saisonalität und Technik vollständig validiert sind. Der relative Makrovergleich "
+                "ist in dieser Version weiterhin nur für EUR/USD implementiert; bei anderen Paaren bedeutet "
+                "NEUTRAL daher eine Daten-Sperre und nicht zwingend einen richtungslosen Markt."
             )
             if result["bias"] == "NEUTRAL":
                 missing_names = {
