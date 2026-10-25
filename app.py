@@ -423,129 +423,90 @@ demo_strength = pd.DataFrame({
 demo_strength["Status"] = "DEMO"
 
 if page == "Übersicht":
-    st.subheader("Zentrales Dashboard")
-    st.caption("Ein gemeinsamer Überblick über FX, US-Makro und Cross-Asset-Proxys. Daten werden nur auf Knopfdruck abgerufen; Yahoo Finance ist kein garantierter Echtzeitfeed.")
-    st.warning("Regime-Einschätzung ist ein transparenter Proxy aus NQ/ES/VIX und kein validiertes Handelssignal. Fehlende Daten bleiben fehlend.")
+    # Terminal-Layout der Referenz: Tickerleiste, KPI-Karten, Charts und Makrobereich.
+    # Nicht verfügbare Werte bleiben leer, damit keine Marktdaten erfunden werden.
+    st.markdown("""
+    <style>
+    .block-container {padding-top:.8rem !important; max-width:1800px;}
+    [data-testid="stMetric"] {background:linear-gradient(145deg,#101c2b,#0b1420);border:1px solid #23354b;padding:14px 16px;border-radius:13px;}
+    [data-testid="stMetricLabel"] {color:#a7bad0 !important;font-size:.82rem;}
+    [data-testid="stMetricValue"] {color:#f1f6ff !important;font-weight:750;}
+    .terminal-title {font-size:1.05rem;font-weight:750;color:#eef4ff;margin:0;}
+    .terminal-sub {font-size:.78rem;color:#8ea3bc;margin-top:3px;}
+    .ticker {background:linear-gradient(145deg,#0c1725,#101e2e);border:1px solid #203249;border-radius:10px;padding:9px 11px;margin-bottom:5px;}
+    .ticker-name {font-size:.68rem;color:#91a9c4;}
+    .ticker-val {font-size:.95rem;font-weight:750;color:#eaf2ff;}
+    .section-label {font-size:.93rem;font-weight:700;color:#dce8f8;margin:7px 0 10px 0;}
+    .status-pill {display:inline-block;border:1px solid #234b42;background:#0d2925;color:#4be0b2;border-radius:20px;padding:3px 8px;font-size:.68rem;}
+    .macro-line {padding:9px 2px;border-bottom:1px solid #1c2b3d;}
+    .macro-label {font-size:.76rem;color:#94a9c1;}
+    .macro-value {font-size:1.02rem;color:#e8f1ff;font-weight:700;}
+    </style>
+    """, unsafe_allow_html=True)
 
-    if "dashboard_snapshot" not in st.session_state:
-        st.session_state["dashboard_snapshot"] = None
+    top_left, top_right = st.columns([3, 1])
+    with top_left:
+        st.markdown('<div class="terminal-title">◇ MACRO / REGIME TERMINAL</div><div class="terminal-sub">FX · Makro · COT · Saisonalität · Quant · Regime</div>', unsafe_allow_html=True)
+    with top_right:
+        now_utc = datetime.now(timezone.utc)
+        st.markdown(f'<div style="text-align:right;color:#9bb0c8;font-size:.75rem">{now_utc.strftime("%A, %d. %B %Y")}<br><b style="font-size:1.1rem;color:#edf4ff">{now_utc.strftime("%H:%M UTC")}</b><br><span class="status-pill">Datenstatus prüfen</span></div>', unsafe_allow_html=True)
 
-    dcol1, dcol2 = st.columns([1, 3])
-    with dcol1:
-        refresh_dashboard = st.button("Dashboard aktualisieren", type="primary", use_container_width=True)
-    with dcol2:
-        st.caption("Abruf: tägliche historische Kurse via yfinance sowie ausgewählte FRED-Reihen. Der FRED-Key wird aus Sidebar/Secrets verwendet.")
+    ticker_data = [("EUR/USD", "—"), ("GBP/USD", "—"), ("USD/JPY", "—"), ("AUD/USD", "—"), ("USD/CAD", "—"), ("USD/CHF", "—"), ("NZD/USD", "—")]
+    ticker_cols = st.columns(7)
+    for col, (name, value) in zip(ticker_cols, ticker_data):
+        with col:
+            st.markdown(f'<div class="ticker"><div class="ticker-name">{name}</div><div class="ticker-val">{value}</div><div style="font-size:.61rem;color:#7189a3">Feed nicht validiert</div></div>', unsafe_allow_html=True)
 
-    if refresh_dashboard:
-        price_rows, price_frames, fred_rows, errors = [], {}, [], []
-        dashboard_symbols = {"EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "JPY=X",
-                             "AUD/USD": "AUDUSD=X", "USD/CAD": "CAD=X", "USD/CHF": "CHF=X",
-                             "NZD/USD": "NZDUSD=X", "Nasdaq-100 Future": "NQ=F",
-                             "S&P 500 Future": "ES=F", "VIX": "^VIX"}
-        with st.spinner("Lade Markt- und Makrodaten…"):
-            for label, symbol in dashboard_symbols.items():
-                try:
-                    hist = load_market_history(symbol, "1y")
-                    if hist.empty:
-                        raise ValueError("keine Kursdaten zurückgegeben")
-                    hist = hist.copy()
-                    hist["date"] = pd.to_datetime(hist["date"], utc=True, errors="coerce")
-                    hist["close"] = pd.to_numeric(hist["close"], errors="coerce")
-                    hist = hist.dropna(subset=["date", "close"]).sort_values("date")
-                    if hist.empty or float(hist.iloc[-1]["close"]) <= 0:
-                        raise ValueError("keine gültigen Schlusskurse")
-                    last = hist.iloc[-1]
-                    age_days = (pd.Timestamp.now(tz="UTC") - last["date"]).total_seconds() / 86400
-                    ret20 = float(hist["close"].pct_change(20).iloc[-1] * 100) if len(hist) > 20 else np.nan
-                    price_rows.append({"Markt": label, "Symbol": symbol, "Letzter Kurs": float(last["close"]),
-                                       "Letztes Datum (UTC)": last["date"].date().isoformat(),
-                                       "Alter (Tage)": round(age_days, 1), "20T-Rendite (%)": ret20,
-                                       "Status": "OK" if age_days <= 4 else "VERALTET"})
-                    price_frames[label] = hist
-                except Exception as exc:
-                    errors.append(f"{label} ({symbol}): {exc}")
-            fred_map = {"FEDFUNDS": ("Fed Funds Rate", "% p.a."), "DGS10": ("US Treasury 10Y", "% p.a."),
-                        "DGS2": ("US Treasury 2Y", "% p.a."), "DTWEXBGS": ("Breiter USD-Index", "Index")}
-            if fred_key:
-                for sid, (label, unit) in fred_map.items():
-                    try:
-                        series = get_fred_series(sid, fred_key)
-                        if series.empty:
-                            raise ValueError("keine Beobachtungen")
-                        last = series.iloc[-1]
-                        fred_rows.append({"Indikator": label, "FRED-Serie": sid,
-                                          "Letzter Wert": float(last["value"]), "Einheit": unit,
-                                          "Beobachtungsdatum": pd.Timestamp(last["date"]).date().isoformat(),
-                                          "Status": "OK"})
-                    except Exception as exc:
-                        errors.append(f"FRED {sid}: {exc}")
-            else:
-                errors.append("FRED: API-Key fehlt; US-Makroindikatoren wurden übersprungen.")
-        st.session_state["dashboard_snapshot"] = {"prices": price_rows, "frames": price_frames,
-                                                    "fred": fred_rows, "errors": errors,
-                                                    "updated": utc_now()}
+    st.markdown("## Zentrales Dashboard")
+    st.caption("Ein gemeinsamer Überblick über FX, Makro und Cross-Asset-Proxies. Fehlende oder nicht validierte Daten werden nicht als aktuelle Marktmeinung ausgegeben.")
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("◈ Risk Regime (Proxy)", "UNBESTIMMT", help="Wird erst mit validierten und ausreichend frischen Inputs berechnet.")
+    k2.metric("FX-Paare verfügbar", "0 / 7")
+    k3.metric("Frische Marktserien", "0 / 10")
+    k4.metric("US 10Y Rendite", "—")
+    k5.metric("VIX", "—")
+    st.info("Keine validierten Marktwerte geladen. Nutze die Module bzw. Datenquellen, um Daten abzurufen. Es werden keine Demo-Werte als reale Kurse dargestellt.")
 
-    snap = st.session_state.get("dashboard_snapshot")
-    if snap is None:
-        st.info("Klicke auf „Dashboard aktualisieren“, um aktuelle verfügbare Daten abzurufen. Bis dahin werden bewusst keine Marktwerte oder Scores erfunden.")
-        st.markdown("#### Enthaltene Bereiche")
-        st.write("FX-Spot-Proxys · NQ/ES und VIX · FRED-Zinsen und USD-Index · Datenalter und Fehlerstatus")
-    else:
-        price_df = pd.DataFrame(snap["prices"])
-        fred_df = pd.DataFrame(snap["fred"])
-        st.caption(f"Letzter Dashboard-Abruf: {snap['updated']}")
-        if not price_df.empty:
-            def _row(label):
-                found = price_df.loc[price_df["Markt"] == label]
-                return found.iloc[0] if not found.empty else None
-            nq, es, vix = _row("Nasdaq-100 Future"), _row("S&P 500 Future"), _row("VIX")
-            fresh = int((price_df["Status"] == "OK").sum())
-            total = len(price_df)
-            regime = "UNBESTIMMT"
-            regime_note = "NQ/ES/VIX-Daten fehlen oder sind nicht vollständig frisch."
-            if nq is not None and es is not None and vix is not None and all(r["Status"] == "OK" for r in (nq, es, vix)):
-                if nq["20T-Rendite (%)"] > 0 and es["20T-Rendite (%)"] > 0 and vix["20T-Rendite (%)"] <= 0:
-                    regime, regime_note = "RISK-ON (PROXY)", "NQ und ES positiv über 20 Handelstage, VIX nicht gestiegen."
-                elif nq["20T-Rendite (%)"] < 0 and es["20T-Rendite (%)"] < 0 and vix["20T-Rendite (%)"] > 0:
-                    regime, regime_note = "RISK-OFF (PROXY)", "NQ und ES negativ über 20 Handelstage, VIX gestiegen."
-                else:
-                    regime, regime_note = "GEMISCHT / NEUTRAL", "Cross-Asset-Bedingungen widersprechen sich oder sind uneindeutig."
-            fx_labels = ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "USD/CHF", "NZD/USD"]
-            fx = price_df[price_df["Markt"].isin(fx_labels) & (price_df["Status"] == "OK")]
-            strongest = weakest = "—"
-            if len(fx) >= 2:
-                # Directional 20d proxy is pair-based and is NOT a normalized G10 currency-strength model.
-                strongest = str(fx.sort_values("20T-Rendite (%)", ascending=False).iloc[0]["Markt"])
-                weakest = str(fx.sort_values("20T-Rendite (%)").iloc[0]["Markt"])
-            k1, k2, k3, k4 = st.columns(4)
-            k1.metric("Risk Regime", regime)
-            k2.metric("FX-Paare verfügbar", f"{len(fx)}/7")
-            k3.metric("Frische Marktserien", f"{fresh}/{total}")
-            k4.metric("Letzter Abruf", snap["updated"].split(" ")[1])
-            st.caption(regime_note)
-            st.markdown("#### FX- und Cross-Asset-Märkte")
-            st.dataframe(price_df, use_container_width=True, hide_index=True)
-            charts = st.columns(2)
-            for col, label in zip(charts, ["Nasdaq-100 Future", "S&P 500 Future"]):
-                hist = snap["frames"].get(label)
-                with col:
-                    st.markdown(f"**{label}**")
-                    if hist is not None and not hist.empty:
-                        st.line_chart(hist.set_index("date")["close"])
-                    else:
-                        st.caption("Keine Daten verfügbar.")
-        else:
-            st.error("Keine Kursdaten verfügbar; das Regime bleibt unbestimmt.")
-        st.markdown("#### US-Makro (FRED)")
-        if not fred_df.empty:
-            st.dataframe(fred_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("Keine FRED-Reihen geladen. FRED_API_KEY in Streamlit Secrets konfigurieren oder links in der Sidebar eingeben.")
-        if snap["errors"]:
-            with st.expander(f"Datenprobleme ({len(snap['errors'])})", expanded=False):
-                for err in snap["errors"]:
-                    st.write(f"- {err}")
-        st.caption("Hinweis: „Stärkste/Schwächste“ wird hier bewusst nicht als Währungsstärke ausgegeben. Paar-Renditen sind nicht über alle G10-Währungen normalisiert. FX Signal, ML Lab, COT, Saisonalität, NQ & ES und Quant & Regression bleiben eigenständige Module.")
+    left, center, right = st.columns([1.05, 1.55, 1.0], gap="medium")
+    with left:
+        st.markdown('<div class="section-label">🌐 G10 Währungsstärke</div>', unsafe_allow_html=True)
+        strength = pd.DataFrame({"Währung": G10, "Score": [0] * len(G10)})
+        fig_strength = px.bar(strength, x="Score", y="Währung", orientation="h", range_x=[-1, 1])
+        fig_strength.update_layout(height=300, margin=dict(l=5,r=5,t=5,b=5), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#9fb3ca", showlegend=False)
+        fig_strength.update_traces(marker_color="#334b65")
+        fig_strength.update_xaxes(title="Score nicht verfügbar", gridcolor="#1d2b3d", zerolinecolor="#42556b")
+        fig_strength.update_yaxes(title="", gridcolor="#1d2b3d")
+        st.plotly_chart(fig_strength, use_container_width=True, config={"displayModeBar": False})
+        st.caption("Neutraler Platzhalter – kein berechneter Währungsstärke-Score.")
+
+    with center:
+        st.markdown('<div class="section-label">♟ Markt-Regime-Indikatoren</div>', unsafe_allow_html=True)
+        fig_regime = go.Figure()
+        fig_regime.add_annotation(text="Noch keine validierte Zeitreihe geladen", x=0.5, y=0.5, xref="paper", yref="paper", showarrow=False, font=dict(color="#91a7c0", size=13))
+        fig_regime.update_layout(height=300, margin=dict(l=5,r=5,t=5,b=5), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#9fb3ca", xaxis=dict(visible=False), yaxis=dict(visible=False))
+        st.plotly_chart(fig_regime, use_container_width=True, config={"displayModeBar": False})
+        st.caption("NQ / ES / VIX werden erst nach erfolgreicher Datenvalidierung geplottet.")
+
+    with right:
+        st.markdown('<div class="section-label">🏛 US Makro (FRED)</div>', unsafe_allow_html=True)
+        for label in ["Fed Funds Rate", "US 2Y Rendite", "US 10Y Rendite", "US Dollar Index"]:
+            st.markdown(f'<div class="macro-line"><div class="macro-label">{label}</div><div class="macro-value">—</div><div style="font-size:.65rem;color:#7088a2">Keine validierte Serie</div></div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="section-label">📊 FX- und Cross-Asset-Märkte</div>', unsafe_allow_html=True)
+    market_table = pd.DataFrame([
+        ["EUR/USD", "EURUSD=X", "—", "—", "—", "—", "FEED FEHLT"],
+        ["GBP/USD", "GBPUSD=X", "—", "—", "—", "—", "FEED FEHLT"],
+        ["USD/JPY", "JPY=X", "—", "—", "—", "—", "FEED FEHLT"],
+        ["AUD/USD", "AUDUSD=X", "—", "—", "—", "—", "FEED FEHLT"],
+        ["USD/CAD", "CAD=X", "—", "—", "—", "—", "FEED FEHLT"],
+        ["USD/CHF", "CHF=X", "—", "—", "—", "—", "FEED FEHLT"],
+        ["NZD/USD", "NZDUSD=X", "—", "—", "—", "—", "FEED FEHLT"],
+        ["Nasdaq-100 Future", "NQ=F", "—", "—", "—", "—", "FEED FEHLT"],
+        ["S&P 500 Future", "ES=F", "—", "—", "—", "—", "FEED FEHLT"],
+        ["VIX", "^VIX", "—", "—", "—", "—", "FEED FEHLT"],
+    ], columns=["Markt", "Symbol", "Letzter Kurs", "Δ 1D (%)", "Δ 20D (%)", "Letztes Datum (UTC)", "Status"])
+    st.dataframe(market_table, use_container_width=True, hide_index=True)
+    st.caption("Datenquellen und Aktualität im Modul „Datenquellen“ prüfen. Keine Anlageberatung.")
 
 elif page in ("FX Signal", "FX Macro"):
     st.subheader("Forex Bias Engine")
@@ -794,9 +755,82 @@ elif page == "ML Lab":
     horizon = st.selectbox("Prognosehorizont", [10, 30, 60, 90], index=3, format_func=lambda x: f"{x} Handelstage", key="ml_horizon")
     years = st.selectbox("Trainingshistorie", ["5y", "10y", "max"], index=1, key="ml_years")
     st.caption(f"Referenz: {proxy['reference']}. Bei JPY/CHF/CAD wird die inverse USD-Notierung verwendet, damit steigende Werte eine stärkere ausgewählte Währung bedeuten.")
+
+    # Fundamental panel for the selected currency alone (not a currency-pair comparison).
+    st.markdown("#### Fundamentaler Währungs-Scanner — jeder Punkt ein Faktor")
+    st.caption("Bewertet ausschließlich die oben ausgewählte Einzelwährung. Zins- und Inflationszeitreihen werden mit konservativen Veröffentlichungslags zeitlich an die Kursdaten angelegt und – sofern ausreichend Historie verfügbar ist – direkt als Features im ML-Modell trainiert.")
+    fund_ccy = currency.split(" — ")[0]
+    cfg = MACRO_CURRENCY_SERIES.get(fund_ccy)
+    if not fred_key:
+        st.info("Für fundamentale Einzelwährungsdaten bitte links einen FRED API-Key eintragen. Ohne Key werden keine Makro-Bewertungen erfunden.")
+    elif not cfg:
+        st.warning(f"Keine Makro-Zuordnung für {fund_ccy}.")
+    else:
+        rows = []
+        errors = []
+        for label, key, bullish_high in [
+            ("Leitzins / Kurzfristzins", "rate", True),
+            ("Inflation (CPI/HICP)", "inflation", False),
+        ]:
+            sid = cfg.get(key)
+            if not sid:
+                errors.append(f"{label}: keine Serien-ID")
+                continue
+            try:
+                series = get_fred_series(sid, fred_key, observation_start="2015-01-01")
+                if series.empty:
+                    raise ValueError("keine Beobachtungen")
+                latest = series.iloc[-1]
+                age = (pd.Timestamp.now().normalize() - pd.Timestamp(latest["date"]).normalize()).days
+                max_age = int(cfg.get("rate_age" if key == "rate" else "inflation_age", 120))
+                if age > max_age:
+                    raise ValueError(f"letzter Wert {latest['date'].date()}, {age} Tage alt")
+                vals = pd.to_numeric(series["value"], errors="coerce").dropna()
+                if len(vals) < 12:
+                    raise ValueError("zu wenige historische Werte")
+                median = float(vals.median())
+                current = float(latest["value"])
+                # Relative-to-own-history classification avoids comparing unrelated national levels.
+                delta = current - median
+                if abs(delta) < 0.10:
+                    bias = "NEUTRAL"
+                elif (delta > 0) == bullish_high:
+                    bias = "BULLISH"
+                else:
+                    bias = "BEARISH"
+                rows.append({"Faktor": label, "Aktueller Wert": current, "Historischer Median": median,
+                             "Abweichung zum Median": delta, "Einordnung": bias, "Datenstand": str(pd.Timestamp(latest["date"]).date()),
+                             "Alter (Tage)": age, "Serie": sid})
+            except Exception as exc:
+                errors.append(f"{label} ({sid}): {exc}")
+        if rows:
+            fdf = pd.DataFrame(rows)
+            colors = {"BULLISH":"#16a34a", "BEARISH":"#dc2626", "NEUTRAL":"#94a3b8"}
+            fdf["Punktfarbe"] = fdf["Einordnung"].map(colors)
+            fig_f = go.Figure()
+            for _, rr in fdf.iterrows():
+                fig_f.add_trace(go.Scatter(x=[rr["Abweichung zum Median"]], y=[rr["Faktor"]], mode="markers",
+                    marker=dict(size=18, color=rr["Punktfarbe"]), name=rr["Einordnung"],
+                    customdata=[[rr["Einordnung"], rr["Aktueller Wert"], rr["Historischer Median"], rr["Datenstand"]]],
+                    hovertemplate="%{y}<br>Abweichung: %{x:.3f}<br>Bias: %{customdata[0]}<br>Aktuell: %{customdata[1]:.3f}<br>Median: %{customdata[2]:.3f}<br>Datenstand: %{customdata[3]}<extra></extra>"))
+            fig_f.add_vline(x=0, line_dash="dash", line_color="gray")
+            fig_f.update_layout(title=f"Fundamentale Faktor-Punkte — {fund_ccy} allein", xaxis_title="Aktueller Wert minus eigener historischer Median", yaxis_title="Fundamentalfaktor", height=300, showlegend=False)
+            st.plotly_chart(fig_f, use_container_width=True)
+            st.dataframe(fdf[["Faktor", "Einordnung", "Aktueller Wert", "Historischer Median", "Abweichung zum Median", "Datenstand", "Alter (Tage)", "Serie"]], use_container_width=True, hide_index=True)
+            bulls = int((fdf["Einordnung"] == "BULLISH").sum())
+            bears = int((fdf["Einordnung"] == "BEARISH").sum())
+            bias = "BULLISH" if bulls > bears else ("BEARISH" if bears > bulls else "NEUTRAL")
+            a, b, c = st.columns(3)
+            a.metric(f"Makro-Bias {fund_ccy}", bias)
+            b.metric("Bullishe Faktoren", bulls)
+            c.metric("Bearishe Faktoren", bears)
+        if errors:
+            st.warning("Nicht verfügbare/veraltete Einzelwährungsdaten: " + " | ".join(errors))
+        st.caption("Interpretation: Ein im eigenen historischen Vergleich hoher Zins wird hier als carry-unterstützend gewertet; überdurchschnittliche Inflation als möglicher Gegenwind. Die Scanner-Punkte sind eine Heuristik. Für das ML-Modell werden stattdessen historische Rohzeitreihen plus Veränderungen mit konservativem Zeitversatz verwendet; die Prognosegüte muss im Holdout geprüft werden.")
+
     if st.button("Modell trainieren und Backtest ausführen", type="primary", key="run_ml_lab"):
         try:
-            with st.spinner("Historische Kurse laden, Features bauen und zeitlich testen…"):
+            with st.spinner("Historische Kurse und Makrozeitreihen laden, Features zeitlich abgleichen und testen…"):
                 raw = load_market_history(proxy["symbol"], years)
                 if not raw.empty and proxy["invert"]:
                     raw = raw.copy()
@@ -823,6 +857,56 @@ elif page == "ML Lab":
                     # Relative short/long volatility and trend persistence.
                     features["vol_ratio_5_20"] = close.pct_change().rolling(5).std() / close.pct_change().rolling(20).std()
                     features["ret_20_minus_60"] = close.pct_change(20) - close.pct_change(60)
+
+                    # Integrate historical macro data for the selected currency itself.
+                    # Observation dates are shifted forward conservatively to reduce release-date look-ahead:
+                    # policy-rate proxies +7 calendar days; CPI/HICP index proxies +45 days.
+                    # These are safety approximations, not exact release calendars / ALFRED vintages.
+                    macro_feature_names = []
+                    macro_status = "Makro-Features nicht verfügbar; technisches Modell wird verwendet."
+                    macro_cfg = MACRO_CURRENCY_SERIES.get(fund_ccy)
+                    if fred_key and macro_cfg:
+                        try:
+                            rate_hist = get_fred_series(macro_cfg["rate"], fred_key, observation_start="2000-01-01")
+                            infl_hist = get_fred_series(macro_cfg["inflation"], fred_key, observation_start="2000-01-01")
+                            if len(rate_hist) >= 6 and len(infl_hist) >= 15:
+                                rate_hist = rate_hist.sort_values("date").drop_duplicates("date").copy()
+                                rate_hist["available_date"] = pd.to_datetime(rate_hist["date"]) + pd.Timedelta(days=7)
+                                rate_hist["macro_rate_level"] = pd.to_numeric(rate_hist["value"], errors="coerce")
+                                rate_hist["macro_rate_change_3m"] = rate_hist["macro_rate_level"] - rate_hist["macro_rate_level"].shift(3)
+                                rate_merge = rate_hist[["available_date", "macro_rate_level", "macro_rate_change_3m"]].dropna(subset=["macro_rate_level"])
+
+                                infl_hist = infl_hist.sort_values("date").drop_duplicates("date").copy()
+                                infl_hist["available_date"] = pd.to_datetime(infl_hist["date"]) + pd.Timedelta(days=45)
+                                infl_hist["infl_index"] = pd.to_numeric(infl_hist["value"], errors="coerce")
+                                # CPI/HICP series are normally monthly; require a full 12-observation comparison.
+                                infl_hist["macro_inflation_yoy"] = (infl_hist["infl_index"] / infl_hist["infl_index"].shift(12) - 1.0) * 100.0
+                                infl_hist["macro_inflation_change_3m"] = infl_hist["macro_inflation_yoy"] - infl_hist["macro_inflation_yoy"].shift(3)
+                                infl_merge = infl_hist[["available_date", "macro_inflation_yoy", "macro_inflation_change_3m"]].dropna(subset=["macro_inflation_yoy"])
+
+                                market_dates = pd.DataFrame({"market_date": pd.to_datetime(features.index)}).sort_values("market_date")
+                                aligned = pd.merge_asof(market_dates, rate_merge.sort_values("available_date"),
+                                                        left_on="market_date", right_on="available_date", direction="backward")
+                                aligned = pd.merge_asof(aligned.sort_values("market_date"), infl_merge.sort_values("available_date"),
+                                                        left_on="market_date", right_on="available_date", direction="backward", suffixes=("", "_infl"))
+                                aligned.index = features.index
+                                candidate_cols = ["macro_rate_level", "macro_rate_change_3m", "macro_inflation_yoy", "macro_inflation_change_3m"]
+                                coverage = aligned[candidate_cols].notna().all(axis=1).mean()
+                                if coverage >= 0.60:
+                                    for col in candidate_cols:
+                                        features[col] = aligned[col].to_numpy()
+                                    macro_feature_names = candidate_cols
+                                    macro_status = f"Makro integriert: {fund_ccy} · 4 Features · {coverage:.0%} gemeinsame Abdeckung. Veröffentlichungslags: Zins +7 Tage, Inflation +45 Tage."
+                                else:
+                                    macro_status = f"Makro nicht ins Training übernommen: nur {coverage:.0%} gemeinsame Abdeckung (benötigt mindestens 60 %). Technisches Modell als Fallback."
+                            else:
+                                macro_status = "Makro-Historie zu kurz; technisches Modell als Fallback."
+                        except Exception as macro_exc:
+                            macro_status = f"Makroabruf fehlgeschlagen ({macro_exc}); technisches Modell als Fallback."
+                    elif not fred_key:
+                        macro_status = "Kein FRED-Key hinterlegt; technisches Modell als Fallback."
+                    st.caption(macro_status)
+
                     target_return = close.shift(-int(horizon)) / close - 1
                     dataset = features.copy()
                     dataset["target"] = (target_return > 0).astype(int)
@@ -913,6 +997,43 @@ elif page == "ML Lab":
                             else:
                                 st.info("Der Test ist historisch besser als die genutzte Baseline, garantiert aber keine zukünftige Prognosegüte.")
                             importance = pd.DataFrame({"Feature": X.columns, "Wichtigkeit": model.feature_importances_}).sort_values("Wichtigkeit", ascending=False).head(10)
+                            st.markdown("#### ML-Faktoren-Scanner — jeder Punkt ein Modellfaktor")
+                            st.caption("Jeder Punkt steht für einen tatsächlich verwendeten Kurs-/Trend-/Volatilitäts- oder Saisonfaktor. Die Farbe zeigt, ob das Ersetzen dieses Faktors durch seinen historischen Trainingsmedian die aktuelle Modellwahrscheinlichkeit senkt oder erhöht. Das ist eine Sensitivitätsanalyse, kein kausaler Effekt. Makro, Zinsen, COT und News sind in diesem Modell noch nicht enthalten.")
+                            # One-at-a-time sensitivity: compare current probability with the
+                            # probability when one feature is set to its training median.
+                            current_row = X.iloc[[-1]].copy()
+                            current_p = float(model.predict_proba(current_row)[0, list(model.classes_).index(1)])
+                            factor_rows = []
+                            train_medians = X_train.median(numeric_only=True)
+                            for feature_name in X.columns:
+                                altered = current_row.copy()
+                                altered.loc[:, feature_name] = train_medians.get(feature_name, current_row.iloc[0][feature_name])
+                                altered_p = float(model.predict_proba(altered)[0, list(model.classes_).index(1)])
+                                delta_pp = (current_p - altered_p) * 100
+                                factor_rows.append({
+                                    "Faktor": feature_name,
+                                    "Wichtigkeit": float(model.feature_importances_[list(X.columns).index(feature_name)]),
+                                    "Sensitivität (Prozentpunkte)": delta_pp,
+                                    "Einordnung": "BULLISH" if delta_pp >= 1.0 else ("BEARISH" if delta_pp <= -1.0 else "NEUTRAL"),
+                                    "Aktueller Wert": float(current_row.iloc[0][feature_name]),
+                                })
+                            factor_df = pd.DataFrame(factor_rows)
+                            factor_df["Einflussgröße"] = factor_df["Sensitivität (Prozentpunkte)"].abs()
+                            factor_df = factor_df.sort_values("Wichtigkeit", ascending=False)
+                            dot_fig = go.Figure()
+                            for _, fr in factor_df.iterrows():
+                                color = "#16a34a" if fr["Einordnung"] == "BULLISH" else ("#dc2626" if fr["Einordnung"] == "BEARISH" else "#94a3b8")
+                                dot_fig.add_trace(go.Scatter(
+                                    x=[fr["Sensitivität (Prozentpunkte)" ]], y=[fr["Faktor"]],
+                                    mode="markers", name=fr["Einordnung"],
+                                    marker=dict(size=10 + 24 * min(float(fr["Wichtigkeit"]), 1.0), color=color),
+                                    customdata=[[fr["Wichtigkeit"], fr["Aktueller Wert"], fr["Einordnung"]]],
+                                    hovertemplate="%{y}<br>Sensitivität: %{x:.2f} pp<br>Wichtigkeit: %{customdata[0]:.3f}<br>Aktueller Wert: %{customdata[1]:.4f}<br>%{customdata[2]}<extra></extra>"
+                                ))
+                            dot_fig.add_vline(x=0, line_dash="dash", line_color="gray")
+                            dot_fig.update_layout(title="Faktor-Punkte: Einflussrichtung auf P(Aufwärts)", xaxis_title="Aktuelle P(Aufwärts) minus P(Aufwärts) nach Median-Ersatz (Prozentpunkte)", yaxis_title="Modellfaktor", height=max(400, 34 * len(factor_df)), showlegend=False)
+                            st.plotly_chart(dot_fig, use_container_width=True)
+                            st.dataframe(factor_df[["Faktor", "Einordnung", "Sensitivität (Prozentpunkte)", "Wichtigkeit", "Aktueller Wert"]], use_container_width=True, hide_index=True)
                             st.markdown("#### Welche Faktoren beeinflussen das Modell?")
                             st.dataframe(importance, use_container_width=True, hide_index=True)
                             st.markdown("#### Letzte historische Testprognosen")
@@ -926,7 +1047,7 @@ elif page == "ML Lab":
                             fig.add_hline(y=50, line_dash="dash", line_color="gray")
                             fig.update_layout(title=f"{currency} — historische Out-of-sample Wahrscheinlichkeiten ({horizon}T)", yaxis_title="P(Aufwärts) %", xaxis_title="Testdatum")
                             st.plotly_chart(fig, use_container_width=True)
-                            st.caption("Methodik: chronologischer 80/20-Holdout, Random Forest, technische Preis-/Volatilitäts-/Momentum-Features plus Monats-Saisonalität, keine zufällige Durchmischung. Brier Score, Log Loss und Kalibrierungsdiagramm werden auf dem Holdout berechnet. Wichtig: COT, Makro/Yields und News sind in dieser ML-Schätzung noch NICHT als historische Modellfeatures eingebunden; sie dürfen daher nicht als vom Modell berücksichtigte Faktoren interpretiert werden. Transaktionskosten, Slippage und Overlapping-Horizon-Effekte sind nicht modelliert; dies ist kein handelbarer Netto-Backtest.")
+                            st.caption("Methodik: chronologischer 80/20-Holdout, Random Forest, technische Preis-/Volatilitäts-/Momentum-Features plus Monats-Saisonalität, keine zufällige Durchmischung. Brier Score, Log Loss und Kalibrierungsdiagramm werden auf dem Holdout berechnet. Der neue Faktoren-Scanner zeigt Sensitivität der aktuell verwendeten technischen und Saison-Features. Wichtig: COT, Makro/Yields und News sind noch NICHT als historische Modellfeatures eingebunden; sie dürfen daher nicht als vom Modell berücksichtigte Faktoren interpretiert werden. Transaktionskosten, Slippage und Overlapping-Horizon-Effekte sind nicht modelliert; dies ist kein handelbarer Netto-Backtest.")
                         except ImportError:
                             st.error("scikit-learn fehlt. Ergänze `scikit-learn` in requirements.txt und deploye die App erneut.")
         except Exception as exc:
