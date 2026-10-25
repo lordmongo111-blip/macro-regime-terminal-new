@@ -423,20 +423,129 @@ demo_strength = pd.DataFrame({
 demo_strength["Status"] = "DEMO"
 
 if page == "Übersicht":
-    st.subheader("Cross-Asset Überblick")
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Risk regime", "UNBESTIMMT", help="Wird erst nach Verbindung valider Inputs berechnet.")
-    k2.metric("Stärkste CCY", "—")
-    k3.metric("Schwächste CCY", "—")
-    k4.metric("Datenqualität", "OHNE FEED")
-    st.info("Hier werden keine Demo-Scores als aktuelle Marktmeinung dargestellt. Verbinde unten Datenquellen, bevor du Signale nutzt.")
-    st.markdown("#### Gewünschte Module")
-    st.write("Forex-Paare · relatives Makro beider Währungsräume · COT-Futures-Positionierung · Monats-Saisonalität · technische Bestätigung · Daten- und Signalqualität")
-    st.markdown("#### Start-Checkliste")
-    st.write("- [ ] FRED API-Key für Makro- und Zinsserien hinterlegen")
-    st.write("- [ ] Historische Forex-Preise abrufen und Aktualität/Vollständigkeit prüfen")
-    st.write("- [ ] CFTC-Kontrakte/Kategorien korrekt zuordnen")
-    st.write("- [ ] Regeln und Schwellenwerte testen, bevor Signale produktiv genutzt werden")
+    st.subheader("Zentrales Dashboard")
+    st.caption("Ein gemeinsamer Überblick über FX, US-Makro und Cross-Asset-Proxys. Daten werden nur auf Knopfdruck abgerufen; Yahoo Finance ist kein garantierter Echtzeitfeed.")
+    st.warning("Regime-Einschätzung ist ein transparenter Proxy aus NQ/ES/VIX und kein validiertes Handelssignal. Fehlende Daten bleiben fehlend.")
+
+    if "dashboard_snapshot" not in st.session_state:
+        st.session_state["dashboard_snapshot"] = None
+
+    dcol1, dcol2 = st.columns([1, 3])
+    with dcol1:
+        refresh_dashboard = st.button("Dashboard aktualisieren", type="primary", use_container_width=True)
+    with dcol2:
+        st.caption("Abruf: tägliche historische Kurse via yfinance sowie ausgewählte FRED-Reihen. Der FRED-Key wird aus Sidebar/Secrets verwendet.")
+
+    if refresh_dashboard:
+        price_rows, price_frames, fred_rows, errors = [], {}, [], []
+        dashboard_symbols = {"EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "JPY=X",
+                             "AUD/USD": "AUDUSD=X", "USD/CAD": "CAD=X", "USD/CHF": "CHF=X",
+                             "NZD/USD": "NZDUSD=X", "Nasdaq-100 Future": "NQ=F",
+                             "S&P 500 Future": "ES=F", "VIX": "^VIX"}
+        with st.spinner("Lade Markt- und Makrodaten…"):
+            for label, symbol in dashboard_symbols.items():
+                try:
+                    hist = load_market_history(symbol, "1y")
+                    if hist.empty:
+                        raise ValueError("keine Kursdaten zurückgegeben")
+                    hist = hist.copy()
+                    hist["date"] = pd.to_datetime(hist["date"], utc=True, errors="coerce")
+                    hist["close"] = pd.to_numeric(hist["close"], errors="coerce")
+                    hist = hist.dropna(subset=["date", "close"]).sort_values("date")
+                    if hist.empty or float(hist.iloc[-1]["close"]) <= 0:
+                        raise ValueError("keine gültigen Schlusskurse")
+                    last = hist.iloc[-1]
+                    age_days = (pd.Timestamp.now(tz="UTC") - last["date"]).total_seconds() / 86400
+                    ret20 = float(hist["close"].pct_change(20).iloc[-1] * 100) if len(hist) > 20 else np.nan
+                    price_rows.append({"Markt": label, "Symbol": symbol, "Letzter Kurs": float(last["close"]),
+                                       "Letztes Datum (UTC)": last["date"].date().isoformat(),
+                                       "Alter (Tage)": round(age_days, 1), "20T-Rendite (%)": ret20,
+                                       "Status": "OK" if age_days <= 4 else "VERALTET"})
+                    price_frames[label] = hist
+                except Exception as exc:
+                    errors.append(f"{label} ({symbol}): {exc}")
+            fred_map = {"FEDFUNDS": ("Fed Funds Rate", "% p.a."), "DGS10": ("US Treasury 10Y", "% p.a."),
+                        "DGS2": ("US Treasury 2Y", "% p.a."), "DTWEXBGS": ("Breiter USD-Index", "Index")}
+            if fred_key:
+                for sid, (label, unit) in fred_map.items():
+                    try:
+                        series = get_fred_series(sid, fred_key)
+                        if series.empty:
+                            raise ValueError("keine Beobachtungen")
+                        last = series.iloc[-1]
+                        fred_rows.append({"Indikator": label, "FRED-Serie": sid,
+                                          "Letzter Wert": float(last["value"]), "Einheit": unit,
+                                          "Beobachtungsdatum": pd.Timestamp(last["date"]).date().isoformat(),
+                                          "Status": "OK"})
+                    except Exception as exc:
+                        errors.append(f"FRED {sid}: {exc}")
+            else:
+                errors.append("FRED: API-Key fehlt; US-Makroindikatoren wurden übersprungen.")
+        st.session_state["dashboard_snapshot"] = {"prices": price_rows, "frames": price_frames,
+                                                    "fred": fred_rows, "errors": errors,
+                                                    "updated": utc_now()}
+
+    snap = st.session_state.get("dashboard_snapshot")
+    if snap is None:
+        st.info("Klicke auf „Dashboard aktualisieren“, um aktuelle verfügbare Daten abzurufen. Bis dahin werden bewusst keine Marktwerte oder Scores erfunden.")
+        st.markdown("#### Enthaltene Bereiche")
+        st.write("FX-Spot-Proxys · NQ/ES und VIX · FRED-Zinsen und USD-Index · Datenalter und Fehlerstatus")
+    else:
+        price_df = pd.DataFrame(snap["prices"])
+        fred_df = pd.DataFrame(snap["fred"])
+        st.caption(f"Letzter Dashboard-Abruf: {snap['updated']}")
+        if not price_df.empty:
+            def _row(label):
+                found = price_df.loc[price_df["Markt"] == label]
+                return found.iloc[0] if not found.empty else None
+            nq, es, vix = _row("Nasdaq-100 Future"), _row("S&P 500 Future"), _row("VIX")
+            fresh = int((price_df["Status"] == "OK").sum())
+            total = len(price_df)
+            regime = "UNBESTIMMT"
+            regime_note = "NQ/ES/VIX-Daten fehlen oder sind nicht vollständig frisch."
+            if nq is not None and es is not None and vix is not None and all(r["Status"] == "OK" for r in (nq, es, vix)):
+                if nq["20T-Rendite (%)"] > 0 and es["20T-Rendite (%)"] > 0 and vix["20T-Rendite (%)"] <= 0:
+                    regime, regime_note = "RISK-ON (PROXY)", "NQ und ES positiv über 20 Handelstage, VIX nicht gestiegen."
+                elif nq["20T-Rendite (%)"] < 0 and es["20T-Rendite (%)"] < 0 and vix["20T-Rendite (%)"] > 0:
+                    regime, regime_note = "RISK-OFF (PROXY)", "NQ und ES negativ über 20 Handelstage, VIX gestiegen."
+                else:
+                    regime, regime_note = "GEMISCHT / NEUTRAL", "Cross-Asset-Bedingungen widersprechen sich oder sind uneindeutig."
+            fx_labels = ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "USD/CHF", "NZD/USD"]
+            fx = price_df[price_df["Markt"].isin(fx_labels) & (price_df["Status"] == "OK")]
+            strongest = weakest = "—"
+            if len(fx) >= 2:
+                # Directional 20d proxy is pair-based and is NOT a normalized G10 currency-strength model.
+                strongest = str(fx.sort_values("20T-Rendite (%)", ascending=False).iloc[0]["Markt"])
+                weakest = str(fx.sort_values("20T-Rendite (%)").iloc[0]["Markt"])
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Risk Regime", regime)
+            k2.metric("FX-Paare verfügbar", f"{len(fx)}/7")
+            k3.metric("Frische Marktserien", f"{fresh}/{total}")
+            k4.metric("Letzter Abruf", snap["updated"].split(" ")[1])
+            st.caption(regime_note)
+            st.markdown("#### FX- und Cross-Asset-Märkte")
+            st.dataframe(price_df, use_container_width=True, hide_index=True)
+            charts = st.columns(2)
+            for col, label in zip(charts, ["Nasdaq-100 Future", "S&P 500 Future"]):
+                hist = snap["frames"].get(label)
+                with col:
+                    st.markdown(f"**{label}**")
+                    if hist is not None and not hist.empty:
+                        st.line_chart(hist.set_index("date")["close"])
+                    else:
+                        st.caption("Keine Daten verfügbar.")
+        else:
+            st.error("Keine Kursdaten verfügbar; das Regime bleibt unbestimmt.")
+        st.markdown("#### US-Makro (FRED)")
+        if not fred_df.empty:
+            st.dataframe(fred_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Keine FRED-Reihen geladen. FRED_API_KEY in Streamlit Secrets konfigurieren oder links in der Sidebar eingeben.")
+        if snap["errors"]:
+            with st.expander(f"Datenprobleme ({len(snap['errors'])})", expanded=False):
+                for err in snap["errors"]:
+                    st.write(f"- {err}")
+        st.caption("Hinweis: „Stärkste/Schwächste“ wird hier bewusst nicht als Währungsstärke ausgegeben. Paar-Renditen sind nicht über alle G10-Währungen normalisiert. FX Signal, ML Lab, COT, Saisonalität, NQ & ES und Quant & Regression bleiben eigenständige Module.")
 
 elif page in ("FX Signal", "FX Macro"):
     st.subheader("Forex Bias Engine")
