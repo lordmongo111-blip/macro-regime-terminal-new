@@ -616,29 +616,67 @@ if page == "Übersicht":
                 # Directional 20d proxy is pair-based and is NOT a normalized G10 currency-strength model.
                 strongest = str(fx.sort_values("20T-Rendite (%)", ascending=False).iloc[0]["Markt"])
                 weakest = str(fx.sort_values("20T-Rendite (%)").iloc[0]["Markt"])
-            k1, k2, k3, k4 = st.columns(4)
-            k1.metric("Risk Regime", regime)
-            k2.metric("FX-Paare verfügbar", f"{len(fx)}/7")
-            k3.metric("Frische Marktserien", f"{fresh}/{total}")
-            k4.metric("Letzter Abruf", snap["updated"].split(" ")[1])
+            # Reference-style overview: KPI row, three analytical panels, then market table + data quality.
+            k1, k2, k3, k4, k5 = st.columns(5, gap="small")
+            k1.metric("🛡️ Risk Regime (Proxy)", regime.replace(" (PROXY)", ""), regime_note[:65])
+            k2.metric("💱 FX-Paare verfügbar", f"{len(fx)}/7", "Yahoo Finance")
+            k3.metric("▤ Frische Marktserien", f"{fresh}/{total}", "Verfügbare Abfragen")
+            _us10 = fred_df.loc[fred_df["FRED-Serie"] == "DGS10"] if not fred_df.empty and "FRED-Serie" in fred_df else pd.DataFrame()
+            _vix = _row("VIX")
+            k4.metric("📈 US 10Y Rendite", (f"{float(_us10.iloc[0]['Letzter Wert']):.2f} %" if not _us10.empty else "—"), "FRED")
+            k5.metric("〽️ VIX", (f"{float(_vix['Letzter Kurs']):.2f}" if _vix is not None else "—"), "Yahoo Finance")
             st.caption(regime_note)
-            st.markdown("#### FX- und Cross-Asset-Märkte")
-            st.dataframe(price_df, use_container_width=True, hide_index=True)
-            charts = st.columns(2)
-            for col, label in zip(charts, ["Nasdaq-100 Future", "S&P 500 Future"]):
-                hist = snap["frames"].get(label)
-                with col:
-                    st.markdown(f"**{label}**")
+
+            left, middle, right = st.columns([1.05, 1.35, 1.0], gap="medium")
+            with left:
+                st.markdown("**🌐 G10 Währungsstärke (20 Tage)**")
+                if len(fx) >= 2:
+                    strength_df = fx[["Markt", "20T-Rendite (%)"]].dropna().sort_values("20T-Rendite (%)")
+                    if not strength_df.empty:
+                        fig = go.Figure(go.Bar(x=strength_df["20T-Rendite (%)"], y=strength_df["Markt"], orientation="h",
+                            marker_color=["#00d49a" if x >= 0 else "#ff2448" for x in strength_df["20T-Rendite (%)"]]))
+                        fig.update_layout(height=300, margin=dict(l=0,r=5,t=8,b=8), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                            font=dict(color="#a8bfd3",size=10), xaxis_title="% Veränderung", yaxis_title="", showlegend=False)
+                        st.plotly_chart(fig, use_container_width=True)
+                    else: st.info("Keine ausreichenden FX-Daten.")
+                else: st.info("Keine ausreichenden FX-Daten.")
+            with middle:
+                st.markdown("**♟ Markt-Regime-Indikatoren**")
+                fig = go.Figure()
+                for label, color in [("Nasdaq-100 Future", "#ff2448"), ("S&P 500 Future", "#55aaff"), ("VIX", "#ffbf47")]:
+                    hist = snap["frames"].get(label)
                     if hist is not None and not hist.empty:
-                        st.line_chart(hist.set_index("date")["close"])
-                    else:
-                        st.caption("Keine Daten verfügbar.")
+                        vals = pd.to_numeric(hist["close"], errors="coerce").dropna()
+                        if len(vals) > 1:
+                            norm = (vals / vals.iloc[0] - 1) * 100
+                            if label == "VIX": norm = -norm
+                            fig.add_trace(go.Scatter(x=hist.loc[vals.index, "date"] if "date" in hist else vals.index, y=norm, name=label, mode="lines", line=dict(color=color,width=2)))
+                fig.add_hline(y=0, line_color="#526779", line_width=1)
+                fig.update_layout(height=300, margin=dict(l=0,r=5,t=8,b=8), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="#a8bfd3",size=10), legend=dict(orientation="h",y=1.12), xaxis_title="", yaxis_title="% normalisiert")
+                st.plotly_chart(fig, use_container_width=True)
+            with right:
+                st.markdown("**🏦 US Makro (FRED)**")
+                if not fred_df.empty:
+                    for _, row in fred_df.iterrows():
+                        st.markdown(f"<div style='padding:9px 0;border-bottom:1px solid #203043'><div style='color:#8198ad;font-size:12px'>{row['Indikator']}</div><b style='font-size:18px'>{float(row['Letzter Wert']):.2f}{' %' if '%' in str(row['Einheit']) else ''}</b><div style='color:#8198ad;font-size:11px'>{row['Beobachtungsdatum']}</div></div>", unsafe_allow_html=True)
+                else:
+                    st.info("Keine FRED-Reihen geladen. API-Key links eingeben.")
+
+            st.write("")
+            left, right = st.columns([2.1, 1.0], gap="medium")
+            with left:
+                st.markdown("**💹 FX- und Cross-Asset-Märkte**")
+                st.dataframe(price_df, use_container_width=True, hide_index=True)
+            with right:
+                st.markdown("**🟢 Datenqualität**")
+                _checks = [("FX-Kurse (Yahoo Finance)", len(fx), 7), ("NQ / ES / VIX", sum(_row(x) is not None for x in ["Nasdaq-100 Future", "S&P 500 Future", "VIX"]), 3), ("Makrodaten (FRED)", len(fred_df), 4)]
+                for _label, _ok, _total in _checks:
+                    _color = "#00d49a" if _ok == _total else ("#ffbf47" if _ok else "#ff2448")
+                    st.markdown(f"<div style='padding:10px 0;border-bottom:1px solid #203043'><b>{_label}</b><span style='float:right;color:{_color}'>● {_ok}/{_total}</span></div>", unsafe_allow_html=True)
+                st.caption("Historische Daten sind nicht automatisch Echtzeitdaten.")
         else:
             st.error("Keine Kursdaten verfügbar; das Regime bleibt unbestimmt.")
-        st.markdown("#### US-Makro (FRED)")
-        if not fred_df.empty:
-            st.dataframe(fred_df, use_container_width=True, hide_index=True)
-        else:
             st.info("Keine FRED-Reihen geladen. FRED_API_KEY in Streamlit Secrets konfigurieren oder links in der Sidebar eingeben.")
         if snap["errors"]:
             with st.expander(f"Datenprobleme ({len(snap['errors'])})", expanded=False):
