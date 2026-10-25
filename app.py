@@ -427,20 +427,24 @@ if page == "Übersicht":
     # Nicht verfügbare Werte bleiben leer, damit keine Marktdaten erfunden werden.
     st.markdown("""
     <style>
-    .block-container {padding-top:.8rem !important; max-width:1800px;}
-    [data-testid="stMetric"] {background:linear-gradient(145deg,#101c2b,#0b1420);border:1px solid #23354b;padding:14px 16px;border-radius:13px;}
-    [data-testid="stMetricLabel"] {color:#a7bad0 !important;font-size:.82rem;}
-    [data-testid="stMetricValue"] {color:#f1f6ff !important;font-weight:750;}
-    .terminal-title {font-size:1.05rem;font-weight:750;color:#eef4ff;margin:0;}
-    .terminal-sub {font-size:.78rem;color:#8ea3bc;margin-top:3px;}
-    .ticker {background:linear-gradient(145deg,#0c1725,#101e2e);border:1px solid #203249;border-radius:10px;padding:9px 11px;margin-bottom:5px;}
-    .ticker-name {font-size:.68rem;color:#91a9c4;}
-    .ticker-val {font-size:.95rem;font-weight:750;color:#eaf2ff;}
-    .section-label {font-size:.93rem;font-weight:700;color:#dce8f8;margin:7px 0 10px 0;}
-    .status-pill {display:inline-block;border:1px solid #234b42;background:#0d2925;color:#4be0b2;border-radius:20px;padding:3px 8px;font-size:.68rem;}
-    .macro-line {padding:9px 2px;border-bottom:1px solid #1c2b3d;}
-    .macro-label {font-size:.76rem;color:#94a9c1;}
-    .macro-value {font-size:1.02rem;color:#e8f1ff;font-weight:700;}
+    .block-container {padding-top:.65rem !important; padding-bottom:2rem !important; max-width:1900px;}
+    [data-testid="stMetric"] {background:linear-gradient(145deg,#142337,#0b1420);border:1px solid #2a4059;padding:22px 20px;border-radius:14px;min-height:122px;box-shadow:0 6px 20px rgba(0,0,0,.12);}
+    [data-testid="stMetricLabel"] {color:#a7bad0 !important;font-size:.86rem;letter-spacing:.02em;}
+    [data-testid="stMetricValue"] {color:#f1f6ff !important;font-weight:780;font-size:1.8rem;}
+    [data-testid="stMetricDelta"] {font-size:.78rem;}
+    .terminal-title {font-size:1.2rem;font-weight:800;color:#eef4ff;margin:0;letter-spacing:.035em;}
+    .terminal-sub {font-size:.82rem;color:#8ea3bc;margin-top:5px;}
+    .ticker {background:linear-gradient(145deg,#0c1725,#101e2e);border:1px solid #263b52;border-radius:10px;padding:13px 12px;margin-bottom:8px;min-height:76px;}
+    .ticker-name {font-size:.72rem;color:#91a9c4;letter-spacing:.03em;}
+    .ticker-val {font-size:1.05rem;font-weight:780;color:#eaf2ff;margin-top:5px;}
+    .section-label {font-size:1rem;font-weight:750;color:#e4edf9;margin:7px 0 13px 0;padding-bottom:9px;border-bottom:1px solid #26384c;}
+    .status-pill {display:inline-block;border:1px solid #234b42;background:#0d2925;color:#4be0b2;border-radius:20px;padding:4px 10px;font-size:.7rem;}
+    .macro-line {padding:12px 3px;border-bottom:1px solid #1c2b3d;}
+    .macro-label {font-size:.8rem;color:#94a9c1;}
+    .macro-value {font-size:1.12rem;color:#e8f1ff;font-weight:750;margin-top:3px;}
+    div[data-testid="stPlotlyChart"] {border:1px solid #1c2d40;border-radius:12px;padding:8px;background:rgba(10,20,32,.35);}
+    div[data-testid="stDataFrame"] {border:1px solid #26384c;border-radius:10px;overflow:hidden;}
+    h2 {margin-top:.8rem !important;}
     </style>
     """, unsafe_allow_html=True)
 
@@ -459,7 +463,7 @@ if page == "Übersicht":
 
     st.markdown("## Zentrales Dashboard")
     st.caption("Ein gemeinsamer Überblick über FX, Makro und Cross-Asset-Proxies. Fehlende oder nicht validierte Daten werden nicht als aktuelle Marktmeinung ausgegeben.")
-    k1, k2, k3, k4, k5 = st.columns(5)
+    k1, k2, k3, k4, k5 = st.columns(5, gap="medium")
     k1.metric("◈ Risk Regime (Proxy)", "UNBESTIMMT", help="Wird erst mit validierten und ausreichend frischen Inputs berechnet.")
     k2.metric("FX-Paare verfügbar", "0 / 7")
     k3.metric("Frische Marktserien", "0 / 10")
@@ -467,12 +471,12 @@ if page == "Übersicht":
     k5.metric("VIX", "—")
     st.info("Keine validierten Marktwerte geladen. Nutze die Module bzw. Datenquellen, um Daten abzurufen. Es werden keine Demo-Werte als reale Kurse dargestellt.")
 
-    left, center, right = st.columns([1.05, 1.55, 1.0], gap="medium")
+    left, center, right = st.columns([1.12, 1.28, 1.12], gap="large")
     with left:
         st.markdown('<div class="section-label">🌐 G10 Währungsstärke</div>', unsafe_allow_html=True)
         strength = pd.DataFrame({"Währung": G10, "Score": [0] * len(G10)})
         fig_strength = px.bar(strength, x="Score", y="Währung", orientation="h", range_x=[-1, 1])
-        fig_strength.update_layout(height=300, margin=dict(l=5,r=5,t=5,b=5), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#9fb3ca", showlegend=False)
+        fig_strength.update_layout(height=350, margin=dict(l=12,r=12,t=12,b=12), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#9fb3ca", showlegend=False)
         fig_strength.update_traces(marker_color="#334b65")
         fig_strength.update_xaxes(title="Score nicht verfügbar", gridcolor="#1d2b3d", zerolinecolor="#42556b")
         fig_strength.update_yaxes(title="", gridcolor="#1d2b3d")
@@ -483,7 +487,7 @@ if page == "Übersicht":
         st.markdown('<div class="section-label">♟ Markt-Regime-Indikatoren</div>', unsafe_allow_html=True)
         fig_regime = go.Figure()
         fig_regime.add_annotation(text="Noch keine validierte Zeitreihe geladen", x=0.5, y=0.5, xref="paper", yref="paper", showarrow=False, font=dict(color="#91a7c0", size=13))
-        fig_regime.update_layout(height=300, margin=dict(l=5,r=5,t=5,b=5), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#9fb3ca", xaxis=dict(visible=False), yaxis=dict(visible=False))
+        fig_regime.update_layout(height=350, margin=dict(l=12,r=12,t=12,b=12), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#9fb3ca", xaxis=dict(visible=False), yaxis=dict(visible=False))
         st.plotly_chart(fig_regime, use_container_width=True, config={"displayModeBar": False})
         st.caption("NQ / ES / VIX werden erst nach erfolgreicher Datenvalidierung geplottet.")
 
