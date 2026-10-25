@@ -53,6 +53,33 @@ a { color:#55b9ff; }
 .stApp { background:radial-gradient(ellipse at 75% 0%,#102236 0%,#07111b 55%); }
 h1,h2,h3 { color:#f4f8fc; }
 .stButton > button { background:linear-gradient(100deg,#ff1744,#e90032); border:0; color:#fff; border-radius:9px; font-weight:700; }
+
+/* Reference dashboard refinements */
+.block-container { max-width: 1920px; padding: .9rem 1.45rem 2rem; }
+[data-testid="stSidebar"] { min-width: 220px; }
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h1,
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h2,
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 { letter-spacing:-.02em; }
+[data-testid="stSidebar"] [role="radiogroup"] { gap: 3px; }
+[data-testid="stSidebar"] [role="radiogroup"] label {
+  display:flex; align-items:center; min-height:34px; padding:.35rem .55rem;
+  border:1px solid transparent; transition:background .15s ease;
+}
+[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {
+  box-shadow:0 5px 18px rgba(255,23,68,.16); border-color:rgba(255,75,105,.45);
+}
+[data-testid="stMetric"] { min-height:105px; display:flex; flex-direction:column; justify-content:center; }
+[data-testid="stMetricValue"] { font-size:clamp(1.3rem,2vw,2rem); }
+[data-testid="stHorizontalBlock"] { gap: .8rem; }
+[data-testid="stDataFrame"] { background:#0a1420; }
+[data-testid="stTabs"] button { font-weight:650; }
+[data-testid="stPlotlyChart"] { background:linear-gradient(180deg,rgba(10,22,34,.45),rgba(7,15,24,.2)); border:1px solid #182a3b; border-radius:12px; padding:5px; }
+.stAlert p { color:#d8e5f1 !important; }
+.stButton > button:focus { box-shadow:0 0 0 2px #07111b,0 0 0 4px #ff2447; }
+@media (min-width: 1400px) {
+  .block-container { padding-left:1.8rem; padding-right:1.8rem; }
+}
+
 </style>
 """, unsafe_allow_html=True)
 
