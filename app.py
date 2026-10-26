@@ -1456,27 +1456,85 @@ elif page == "NQ & ES":
 
 elif page == "Quant & Regression":
     st.subheader("Quant & Regression")
-    st.caption("Demo-Regression wird aus synthetischen Daten gerechnet und ist keine Marktaussage.")
-    rng = np.random.default_rng(42)
-    n = st.slider("Beobachtungen", 30, 500, 120, 10)
-    x = rng.normal(0, 1, n)
-    y = -0.45*x + rng.normal(0, 0.8, n)
-    fit = np.polyfit(x, y, 1)
-    pred = np.polyval(fit, x)
-    ss_res = np.sum((y-pred)**2)
-    ss_tot = np.sum((y-y.mean())**2)
-    r2 = 1 - ss_res/ss_tot
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Beta (synthetisch)", f"{fit[0]:.3f}")
-    c2.metric("R² (synthetisch)", f"{r2:.3f}")
-    c3.metric("Observations", n)
-    plot_df = pd.DataFrame({"x": x, "y": y, "OLS": pred}).sort_values("x")
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=x, y=y, mode="markers", name="Synthetische Punkte", opacity=.6))
-    fig.add_trace(go.Scatter(x=plot_df["x"], y=plot_df["OLS"], mode="lines", name="OLS-Linie"))
-    st.plotly_chart(fig, use_container_width=True)
+    st.caption("OLS auf historischen Kursrenditen aus der vorhandenen Yahoo Finance/yfinance-Datenquelle. Keine synthetischen Demo-Werte.")
+    fx_pairs = {
+        "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "JPY=X",
+        "AUD/USD": "AUDUSD=X", "USD/CAD": "CAD=X", "USD/CHF": "CHF=X",
+        "NZD/USD": "NZDUSD=X", "EUR/GBP": "EURGBP=X", "EUR/JPY": "EURJPY=X",
+    }
+    benchmarks = {
+        "US-Dollar-Index (DXY)": "DX-Y.NYB", "S&P 500": "^GSPC",
+        "Nasdaq 100": "^NDX", "Gold": "GC=F", "US 10Y Treasury Yield": "^TNX",
+        "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "JPY=X",
+        "AUD/USD": "AUDUSD=X", "USD/CAD": "CAD=X", "USD/CHF": "CHF=X",
+        "NZD/USD": "NZDUSD=X",
+    }
+    with st.form("quant_regression_form"):
+        c1, c2 = st.columns(2)
+        pair_label = c1.selectbox("FX-Paar (abhängige Variable)", list(fx_pairs), index=0)
+        bench_label = c2.selectbox("Benchmark (erklärende Variable)", list(benchmarks), index=0)
+        c3, c4 = st.columns(2)
+        period_label = c3.selectbox("Historischer Zeitraum", ["1 Jahr", "2 Jahre", "5 Jahre", "10 Jahre"], index=1)
+        freq_label = c4.selectbox("Renditefrequenz", ["Täglich", "Wöchentlich"], index=0)
+        submitted = st.form_submit_button("Historische Regression berechnen", type="primary")
+    if submitted:
+        pair_symbol, bench_symbol = fx_pairs[pair_label], benchmarks[bench_label]
+        period_map = {"1 Jahr": "1y", "2 Jahre": "2y", "5 Jahre": "5y", "10 Jahre": "10y"}
+        period = period_map[period_label]
+        try:
+            if pair_symbol == bench_symbol:
+                raise ValueError("FX-Paar und Benchmark müssen unterschiedlich sein.")
+            pair_prices = load_market_history(pair_symbol, period)
+            bench_prices = load_market_history(bench_symbol, period)
+            if pair_prices.empty:
+                raise ValueError(f"Keine historischen Daten für {pair_label} ({pair_symbol}).")
+            if bench_prices.empty:
+                raise ValueError(f"Keine historischen Daten für {bench_label} ({bench_symbol}).")
+            pair_prices["date"] = pd.to_datetime(pair_prices["date"]).dt.tz_localize(None)
+            bench_prices["date"] = pd.to_datetime(bench_prices["date"]).dt.tz_localize(None)
+            if freq_label == "Wöchentlich":
+                pair_prices = pair_prices.set_index("date")["close"].resample("W-FRI").last().dropna().rename("pair_close").reset_index()
+                bench_prices = bench_prices.set_index("date")["close"].resample("W-FRI").last().dropna().rename("bench_close").reset_index()
+            pair_prices["pair_return_pct"] = pair_prices["close"].pct_change() * 100
+            bench_prices["bench_return_pct"] = bench_prices["close"].pct_change() * 100
+            merged = pd.merge(
+                pair_prices[["date", "pair_return_pct"]],
+                bench_prices[["date", "bench_return_pct"]], on="date", how="inner"
+            ).replace([np.inf, -np.inf], np.nan).dropna().sort_values("date")
+            if len(merged) < 10:
+                raise ValueError(f"Nur {len(merged)} gemeinsame Renditebeobachtungen; mindestens 10 werden benötigt.")
+            x = merged["bench_return_pct"].to_numpy(dtype=float)
+            y = merged["pair_return_pct"].to_numpy(dtype=float)
+            if np.std(x) == 0 or np.std(y) == 0:
+                raise ValueError("Regression nicht möglich: mindestens eine Renditereihe hat keine Varianz.")
+            beta, alpha = np.polyfit(x, y, 1)
+            predicted = alpha + beta * x
+            ss_res = float(np.sum((y - predicted) ** 2))
+            ss_tot = float(np.sum((y - np.mean(y)) ** 2))
+            r2 = 1 - ss_res / ss_tot if ss_tot else np.nan
+            corr = float(np.corrcoef(x, y)[0, 1])
+            merged["OLS_fit_pct"] = predicted
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Beta", f"{beta:.4f}")
+            c2.metric("R²", f"{r2:.4f}")
+            c3.metric("Korrelation", f"{corr:.4f}")
+            c4.metric("Beobachtungen", f"{len(merged):,}")
+            st.caption(f"{pair_label} gegen {bench_label} · {period_label} · {freq_label.lower()} · Quelle: Yahoo Finance via yfinance · Abruf {utc_now()}")
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=merged["bench_return_pct"], y=merged["pair_return_pct"], mode="markers", name="Historische Renditen", marker={"opacity": 0.6}))
+            line_df = merged.sort_values("bench_return_pct")
+            fig.add_trace(go.Scatter(x=line_df["bench_return_pct"], y=alpha + beta * line_df["bench_return_pct"], mode="lines", name="OLS-Regressionslinie"))
+            fig.update_layout(xaxis_title=f"{bench_label} Rendite (%)", yaxis_title=f"{pair_label} Rendite (%)", legend_title="Serie", hovermode="closest")
+            st.plotly_chart(fig, use_container_width=True)
+            display = merged.rename(columns={"date": "Datum", "pair_return_pct": f"{pair_label} Rendite (%)", "bench_return_pct": f"{bench_label} Rendite (%)", "OLS_fit_pct": "OLS-Schätzwert (%)"})
+            st.dataframe(display.sort_values("Datum", ascending=False), use_container_width=True, hide_index=True)
+            st.download_button("CSV exportieren", data=display.to_csv(index=False).encode("utf-8-sig"), file_name="quant_regression_historical_returns.csv", mime="text/csv")
+            st.info("Interpretation: Beta beschreibt die lineare Sensitivität der FX-Paar-Rendite gegenüber der Benchmark-Rendite. R² ist der erklärte Anteil der Stichprobenvarianz; es beweist keine Kausalität und garantiert keine Prognosegüte.")
+        except Exception as e:
+            st.error(f"Historische Regression fehlgeschlagen: {e}")
+            st.caption("Es werden keine synthetischen Werte als Ersatz angezeigt. Prüfe die Datenverbindung, Symbolverfügbarkeit und installierte yfinance-Version.")
     st.markdown("#### Risk regime inputs")
-    st.write("Noch nicht bewertet: Aktienbreite, Realrenditen, Kreditspreads, Dollartrend, Volatilität. Keine Risk-on/off-Klassifikation ohne verifizierte Inputs.")
+    st.write("Noch nicht bewertet: Aktienbreite, Realrenditen, Kreditspreads, Dollartrend und Volatilität. Keine Risk-on/off-Klassifikation ohne verifizierte Inputs.")
 
 else:
     st.subheader("Datenquellen & Aktualität")
