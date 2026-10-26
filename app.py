@@ -484,7 +484,7 @@ st.warning("Datenstatus: Ohne konfigurierte Datenquelle werden keine aktuellen M
 with st.sidebar:
     st.markdown('<div class="brand"><div class="logo"><span>◇</span></div><div><div class="brand-title" style="font-size:16px">MACRO / REGIME</div><div class="brand-sub" style="font-size:10px">FX · Makro · COT · Quant</div></div></div>', unsafe_allow_html=True)
     st.header("Einstellungen")
-    page = st.radio("Modul", ["Übersicht", "FX Signal", "ML Lab", "Index ML Lab", "Saisonalität", "COT / Positioning", "NQ & ES", "Index Macro & Seasonality", "Quant & Regression", "Datenquellen"])
+    page = st.radio("Modul", ["Übersicht", "FX Signal", "Index Signal", "ML Lab", "Index ML Lab", "Saisonalität", "COT / Positioning", "NQ & ES", "Index Macro & Seasonality", "Quant & Regression", "Datenquellen"])
     st.divider()
     try:
         saved_fred_key = st.secrets.get("FRED_API_KEY", "")
@@ -1810,9 +1810,14 @@ elif page == "Quant & Regression":
     st.write("Noch nicht bewertet: Aktienbreite, Realrenditen, Kreditspreads, Dollartrend und Volatilität. Keine Risk-on/off-Klassifikation ohne verifizierte Inputs.")
 
 
-elif page == "Index Macro & Seasonality":
-    st.subheader("Cash Indices — Macro Regime & Seasonality")
-    st.caption("Analyse für die acht Alpha Capital Group Cash-Index-Symbole. Historische Preise werden über verfügbare Yahoo Finance-Proxies geladen; diese sind nicht zwingend identisch mit dem Broker-CFD und nicht als Echtzeit-/Ausführungskurse zu verstehen.")
+elif page in ("Index Macro & Seasonality", "Index Signal"):
+    if page == "Index Signal":
+        st.subheader("Index Signal — kombinierter fundamentaler Bias")
+        st.caption("Wie beim FX Signal werden Technik/Momentum, COT, Makro-Proxy, Saisonalität und Trendbestätigung in einem gewichteten Score zusammengeführt. Wähle den Index und klicke auf „Index-Historie laden und Saisonmuster berechnen“, um die Komponenten zu berechnen und ihre Erklärung anzuzeigen.")
+        st.info("Wichtig: Der finale LONG/SHORT-Bias wird nur freigegeben, wenn alle fünf Komponenten valide sind. Derzeit sind COT und der quantitative Makro-Proxy nur für NAS100, US500 und US30 verfügbar; andere Indizes bleiben deshalb NEUTRAL, bis passende Datenquellen eingebunden sind.")
+    else:
+        st.subheader("Cash Indices — Macro Regime & Seasonality")
+        st.caption("Analyse für die acht Alpha Capital Group Cash-Index-Symbole. Historische Preise werden über verfügbare Yahoo Finance-Proxies geladen; diese sind nicht zwingend identisch mit dem Broker-CFD und nicht als Echtzeit-/Ausführungskurse zu verstehen.")
     index_specs = {
         "EUSTX50": {"name": "EURO STOXX 50", "proxy": "^STOXX50E", "region": "Eurozone", "drivers": "EZB-Leitzinsen und Kommunikation; Eurozone HICP/Inflation; PMI/Industrie und Wachstum; EUR-Wechselkurs; Banken- und Unternehmensgewinne.", "rates": "EZB", "fx": "EUR"},
         "GER30": {"name": "Germany 40 / DAX", "proxy": "^GDAXI", "region": "Deutschland", "drivers": "EZB-Zinspfad; deutscher Ifo/PMI und Industrieaufträge; Exportnachfrage, Energiepreise und EUR; globale Industriekonjunktur und DAX-Gewinne.", "rates": "EZB", "fx": "EUR"},
@@ -1980,6 +1985,8 @@ elif page == "Index Macro & Seasonality":
                 b2.metric("Gewichteter Score", f"{index_composite:+d} / 100")
                 b3.metric("Validierte Komponenten", f"{sum(1 for x in weights.values() if x[2])} / {len(weights)}")
                 bias_detail = pd.DataFrame([{"Faktor": name, "Score": score, "Gewicht": f"{weight:.0%}", "Beitrag": round(score * weight, 1), "Status": "OK" if valid else "FEHLT / NICHT VALIDE", "Erklärung": label} for name, (score, weight, valid, label) in weights.items()])
+                st.markdown("#### Warum kommt dieser Bias zustande?")
+                st.caption("Der Score jedes Faktors reicht von −100 (bearish) bis +100 (bullish). Der Beitrag ist Score × Gewicht. Die Beiträge werden addiert; fehlende Komponenten werden nicht als 0 gewertet und sperren den finalen Bias.")
                 st.dataframe(bias_detail, use_container_width=True, hide_index=True)
                 if not all_components_valid:
                     missing_names = [name for name, (score, weight, valid, label) in weights.items() if not valid]
