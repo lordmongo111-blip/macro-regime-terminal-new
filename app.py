@@ -481,7 +481,7 @@ st.warning("Datenstatus: Ohne konfigurierte Datenquelle werden keine aktuellen M
 with st.sidebar:
     st.markdown('<div class="brand"><div class="logo"><span>◇</span></div><div><div class="brand-title" style="font-size:16px">MACRO / REGIME</div><div class="brand-sub" style="font-size:10px">FX · Makro · COT · Quant</div></div></div>', unsafe_allow_html=True)
     st.header("Einstellungen")
-    page = st.radio("Modul", ["Übersicht", "FX Signal", "ML Lab", "Backtesting", "Saisonalität", "COT / Positioning", "NQ & ES", "Quant & Regression", "Datenquellen"])
+    page = st.radio("Modul", ["Übersicht", "FX Signal", "ML Lab", "Saisonalität", "COT / Positioning", "NQ & ES", "Quant & Regression", "Datenquellen"])
     st.divider()
     try:
         saved_fred_key = st.secrets.get("FRED_API_KEY", "")
@@ -616,198 +616,73 @@ if page == "Übersicht":
                 # Directional 20d proxy is pair-based and is NOT a normalized G10 currency-strength model.
                 strongest = str(fx.sort_values("20T-Rendite (%)", ascending=False).iloc[0]["Markt"])
                 weakest = str(fx.sort_values("20T-Rendite (%)").iloc[0]["Markt"])
-            k1, k2, k3, k4 = st.columns(4)
-            k1.metric("Risk Regime", regime)
-            k2.metric("FX-Paare verfügbar", f"{len(fx)}/7")
-            k3.metric("Frische Marktserien", f"{fresh}/{total}")
-            k4.metric("Letzter Abruf", snap["updated"].split(" ")[1])
+            # Reference-style overview: KPI row, three analytical panels, then market table + data quality.
+            k1, k2, k3, k4, k5 = st.columns(5, gap="small")
+            k1.metric("🛡️ Risk Regime (Proxy)", regime.replace(" (PROXY)", ""), regime_note[:65])
+            k2.metric("💱 FX-Paare verfügbar", f"{len(fx)}/7", "Yahoo Finance")
+            k3.metric("▤ Frische Marktserien", f"{fresh}/{total}", "Verfügbare Abfragen")
+            _us10 = fred_df.loc[fred_df["FRED-Serie"] == "DGS10"] if not fred_df.empty and "FRED-Serie" in fred_df else pd.DataFrame()
+            _vix = _row("VIX")
+            k4.metric("📈 US 10Y Rendite", (f"{float(_us10.iloc[0]['Letzter Wert']):.2f} %" if not _us10.empty else "—"), "FRED")
+            k5.metric("〽️ VIX", (f"{float(_vix['Letzter Kurs']):.2f}" if _vix is not None else "—"), "Yahoo Finance")
             st.caption(regime_note)
-            st.markdown("#### FX- und Cross-Asset-Märkte")
-            st.dataframe(price_df, use_container_width=True, hide_index=True)
-            charts = st.columns(2)
-            for col, label in zip(charts, ["Nasdaq-100 Future", "S&P 500 Future"]):
-                hist = snap["frames"].get(label)
-                with col:
-                    st.markdown(f"**{label}**")
+
+            left, middle, right = st.columns([1.05, 1.35, 1.0], gap="medium")
+            with left:
+                st.markdown("**🌐 G10 Währungsstärke (20 Tage)**")
+                if len(fx) >= 2:
+                    strength_df = fx[["Markt", "20T-Rendite (%)"]].dropna().sort_values("20T-Rendite (%)")
+                    if not strength_df.empty:
+                        fig = go.Figure(go.Bar(x=strength_df["20T-Rendite (%)"], y=strength_df["Markt"], orientation="h",
+                            marker_color=["#00d49a" if x >= 0 else "#ff2448" for x in strength_df["20T-Rendite (%)"]]))
+                        fig.update_layout(height=300, margin=dict(l=0,r=5,t=8,b=8), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                            font=dict(color="#a8bfd3",size=10), xaxis_title="% Veränderung", yaxis_title="", showlegend=False)
+                        st.plotly_chart(fig, use_container_width=True)
+                    else: st.info("Keine ausreichenden FX-Daten.")
+                else: st.info("Keine ausreichenden FX-Daten.")
+            with middle:
+                st.markdown("**♟ Markt-Regime-Indikatoren**")
+                fig = go.Figure()
+                for label, color in [("Nasdaq-100 Future", "#ff2448"), ("S&P 500 Future", "#55aaff"), ("VIX", "#ffbf47")]:
+                    hist = snap["frames"].get(label)
                     if hist is not None and not hist.empty:
-                        st.line_chart(hist.set_index("date")["close"])
-                    else:
-                        st.caption("Keine Daten verfügbar.")
+                        vals = pd.to_numeric(hist["close"], errors="coerce").dropna()
+                        if len(vals) > 1:
+                            norm = (vals / vals.iloc[0] - 1) * 100
+                            if label == "VIX": norm = -norm
+                            fig.add_trace(go.Scatter(x=hist.loc[vals.index, "date"] if "date" in hist else vals.index, y=norm, name=label, mode="lines", line=dict(color=color,width=2)))
+                fig.add_hline(y=0, line_color="#526779", line_width=1)
+                fig.update_layout(height=300, margin=dict(l=0,r=5,t=8,b=8), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="#a8bfd3",size=10), legend=dict(orientation="h",y=1.12), xaxis_title="", yaxis_title="% normalisiert")
+                st.plotly_chart(fig, use_container_width=True)
+            with right:
+                st.markdown("**🏦 US Makro (FRED)**")
+                if not fred_df.empty:
+                    for _, row in fred_df.iterrows():
+                        st.markdown(f"<div style='padding:9px 0;border-bottom:1px solid #203043'><div style='color:#8198ad;font-size:12px'>{row['Indikator']}</div><b style='font-size:18px'>{float(row['Letzter Wert']):.2f}{' %' if '%' in str(row['Einheit']) else ''}</b><div style='color:#8198ad;font-size:11px'>{row['Beobachtungsdatum']}</div></div>", unsafe_allow_html=True)
+                else:
+                    st.info("Keine FRED-Reihen geladen. API-Key links eingeben.")
+
+            st.write("")
+            left, right = st.columns([2.1, 1.0], gap="medium")
+            with left:
+                st.markdown("**💹 FX- und Cross-Asset-Märkte**")
+                st.dataframe(price_df, use_container_width=True, hide_index=True)
+            with right:
+                st.markdown("**🟢 Datenqualität**")
+                _checks = [("FX-Kurse (Yahoo Finance)", len(fx), 7), ("NQ / ES / VIX", sum(_row(x) is not None for x in ["Nasdaq-100 Future", "S&P 500 Future", "VIX"]), 3), ("Makrodaten (FRED)", len(fred_df), 4)]
+                for _label, _ok, _total in _checks:
+                    _color = "#00d49a" if _ok == _total else ("#ffbf47" if _ok else "#ff2448")
+                    st.markdown(f"<div style='padding:10px 0;border-bottom:1px solid #203043'><b>{_label}</b><span style='float:right;color:{_color}'>● {_ok}/{_total}</span></div>", unsafe_allow_html=True)
+                st.caption("Historische Daten sind nicht automatisch Echtzeitdaten.")
         else:
             st.error("Keine Kursdaten verfügbar; das Regime bleibt unbestimmt.")
-        st.markdown("#### US-Makro (FRED)")
-        if not fred_df.empty:
-            st.dataframe(fred_df, use_container_width=True, hide_index=True)
-        else:
             st.info("Keine FRED-Reihen geladen. FRED_API_KEY in Streamlit Secrets konfigurieren oder links in der Sidebar eingeben.")
         if snap["errors"]:
             with st.expander(f"Datenprobleme ({len(snap['errors'])})", expanded=False):
                 for err in snap["errors"]:
                     st.write(f"- {err}")
         st.caption("Hinweis: „Stärkste/Schwächste“ wird hier bewusst nicht als Währungsstärke ausgegeben. Paar-Renditen sind nicht über alle G10-Währungen normalisiert. FX Signal, ML Lab, COT, Saisonalität, NQ & ES und Quant & Regression bleiben eigenständige Module.")
-
-elif page == "Backtesting":
-    st.subheader("Backtesting — historische Strategien & manuelle Trades")
-    st.caption("Simulation auf historischen Tageskursen. Signale werden um eine Kerze verzögert ausgeführt, damit keine Zukunftsdaten in den Einstieg einfließen.")
-    assets = {
-        "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "JPY=X",
-        "AUD/USD": "AUDUSD=X", "USD/CAD": "CAD=X", "USD/CHF": "CHF=X", "NZD/USD": "NZDUSD=X",
-        "Nasdaq-100 Future (Proxy)": "NQ=F", "S&P 500 Future (Proxy)": "ES=F", "VIX": "^VIX",
-        "US Dollar Index": "DX-Y.NYB", "Gold": "GC=F", "Crude Oil": "CL=F"
-    }
-    with st.form("backtest_config"):
-        left, mid, right = st.columns(3)
-        with left:
-            asset_name = st.selectbox("Markt", list(assets.keys()))
-            mode = st.radio("Testtyp", ["Regelbasierte Strategie", "Manuelle Trades"], horizontal=False)
-            period = st.selectbox("Historie", ["1y", "2y", "5y", "10y"], index=2)
-        with mid:
-            strategy = st.selectbox("Strategie", ["EMA-Crossover", "RSI-Reversion", "Momentum"], disabled=(mode == "Manuelle Trades"))
-            fast_n = st.number_input("Schneller Zeitraum / RSI-Periode", min_value=2, max_value=100, value=12, disabled=(mode == "Manuelle Trades"))
-            slow_n = st.number_input("Langsamer EMA / Momentum-Tage", min_value=3, max_value=250, value=26, disabled=(mode == "Manuelle Trades"))
-        with right:
-            start_capital = st.number_input("Startkapital", min_value=100.0, value=10000.0, step=500.0)
-            risk_pct = st.number_input("Positionsgröße (% Kapital je Trade)", min_value=1.0, max_value=100.0, value=10.0, step=1.0)
-            spread_bps = st.number_input("Spread (Basispunkte je Seite)", min_value=0.0, max_value=100.0, value=1.0, step=0.5)
-            fee_bps = st.number_input("Gebühren (Basispunkte je Seite)", min_value=0.0, max_value=100.0, value=0.0, step=0.5)
-            slippage_bps = st.number_input("Slippage (Basispunkte je Seite)", min_value=0.0, max_value=100.0, value=0.5, step=0.5)
-        run_backtest = st.form_submit_button("Historische Daten laden und Backtest ausführen", use_container_width=True)
-
-    if run_backtest:
-        try:
-            prices = load_market_history(assets[asset_name], period=period)
-            if prices.empty or len(prices) < 40:
-                st.error("Zu wenige historische Kursdaten für einen sinnvollen Backtest. Bitte anderen Markt oder längeren Zeitraum wählen.")
-            else:
-                prices = prices.copy()
-                prices["date"] = pd.to_datetime(prices["date"], utc=True).dt.tz_convert(None)
-                prices["close"] = pd.to_numeric(prices["close"], errors="coerce")
-                prices = prices.dropna(subset=["date", "close"]).sort_values("date").drop_duplicates("date").reset_index(drop=True)
-                prices["daily_return"] = prices["close"].pct_change().fillna(0.0)
-                prices["signal"] = 0
-                if mode == "Regelbasierte Strategie":
-                    if strategy == "EMA-Crossover":
-                        prices["fast"] = prices["close"].ewm(span=int(fast_n), adjust=False).mean()
-                        prices["slow"] = prices["close"].ewm(span=max(int(slow_n), int(fast_n)+1), adjust=False).mean()
-                        prices["signal"] = np.where(prices["fast"] > prices["slow"], 1, -1)
-                    elif strategy == "RSI-Reversion":
-                        delta = prices["close"].diff()
-                        gain = delta.clip(lower=0).rolling(int(fast_n)).mean()
-                        loss = -delta.clip(upper=0).rolling(int(fast_n)).mean()
-                        rs = gain / loss.replace(0, np.nan)
-                        rsi = 100 - (100 / (1 + rs))
-                        prices["rsi"] = rsi
-                        prices["signal"] = np.where(rsi < 30, 1, np.where(rsi > 70, -1, 0))
-                    else:
-                        mom = prices["close"].pct_change(int(slow_n))
-                        prices["momentum"] = mom
-                        prices["signal"] = np.where(mom > 0, 1, np.where(mom < 0, -1, 0))
-                    # Signal formed at close t can only be acted on from t+1 onward.
-                    prices["position"] = prices["signal"].shift(1).fillna(0)
-                    turnover = prices["position"].diff().abs().fillna(prices["position"].abs())
-                    cost_rate = (float(spread_bps) + float(fee_bps) + float(slippage_bps)) / 10000.0
-                    prices["net_return"] = prices["position"] * prices["daily_return"] - turnover * cost_rate
-                    equity = float(start_capital) * (1 + prices["net_return"]).cumprod()
-                    changes = prices["position"].diff().fillna(prices["position"])
-                    trades = []
-                    active = None
-                    for i in range(1, len(prices)):
-                        new_pos = int(prices.loc[i, "position"])
-                        old_pos = int(prices.loc[i-1, "position"])
-                        if new_pos != old_pos:
-                            if active is not None:
-                                entry_i, direction, entry_px = active
-                                exit_px = float(prices.loc[i, "close"])
-                                gross = direction * (exit_px / entry_px - 1)
-                                net = gross - 2 * cost_rate
-                                trades.append({"Einstieg": prices.loc[entry_i, "date"], "Ausstieg": prices.loc[i, "date"], "Richtung": "LONG" if direction > 0 else "SHORT", "Einstiegskurs": entry_px, "Ausstiegskurs": exit_px, "Rendite netto %": net*100})
-                                active = None
-                            if new_pos != 0:
-                                active = (i, new_pos, float(prices.loc[i, "close"]))
-                    if active is not None:
-                        entry_i, direction, entry_px = active
-                        exit_px = float(prices.iloc[-1]["close"])
-                        gross = direction * (exit_px / entry_px - 1)
-                        trades.append({"Einstieg": prices.loc[entry_i, "date"], "Ausstieg": prices.iloc[-1]["date"], "Richtung": "LONG" if direction > 0 else "SHORT", "Einstiegskurs": entry_px, "Ausstiegskurs": exit_px, "Rendite netto %": (gross-2*cost_rate)*100})
-                    prices["equity"] = equity
-                    trade_df = pd.DataFrame(trades)
-                else:
-                    st.info("Trage unten deine historischen Ein- und Ausstiege ein. Die Preise werden nicht automatisch optimiert.")
-                    prices["equity"] = float(start_capital)
-                    trade_df = pd.DataFrame(columns=["Einstieg", "Ausstieg", "Richtung", "Einstiegskurs", "Ausstiegskurs", "Rendite netto %"])
-                if mode == "Regelbasierte Strategie":
-                    prices["peak"] = prices["equity"].cummax()
-                    prices["drawdown"] = prices["equity"] / prices["peak"] - 1
-                    st.session_state["bt_prices"] = prices
-                    st.session_state["bt_trades"] = trade_df
-                    st.session_state["bt_asset"] = asset_name
-                    st.session_state["bt_mode"] = mode
-                    st.session_state["bt_start_capital"] = float(start_capital)
-                    st.session_state["bt_cost_rate"] = cost_rate
-                else:
-                    st.session_state["bt_prices"] = prices
-                    st.session_state["bt_trades"] = trade_df
-                    st.session_state["bt_asset"] = asset_name
-                    st.session_state["bt_mode"] = mode
-                    st.session_state["bt_start_capital"] = float(start_capital)
-                    st.session_state["bt_cost_rate"] = (float(spread_bps)+float(fee_bps)+float(slippage_bps))/10000.0
-                st.success(f"Historische Daten geladen: {len(prices)} Tagesbeobachtungen für {asset_name}.")
-        except Exception as exc:
-            st.error(f"Backtest konnte nicht ausgeführt werden: {exc}")
-
-    if "bt_prices" in st.session_state:
-        bp = st.session_state["bt_prices"].copy()
-        st.markdown("#### Ergebnisse")
-        if st.session_state.get("bt_mode") == "Manuelle Trades":
-            st.caption("Manuelle Trades werden unten anhand deiner eingegebenen Ein- und Ausstiegskurse berechnet; die historische Kursreihe dient als Referenz.")
-            manual_template = pd.DataFrame([
-                {"Einstieg": str(bp.iloc[max(0, len(bp)-30)]["date"].date()), "Ausstieg": str(bp.iloc[-1]["date"].date()), "Richtung": "LONG", "Einstiegskurs": float(bp.iloc[max(0, len(bp)-30)]["close"]), "Ausstiegskurs": float(bp.iloc[-1]["close"])}
-            ])
-            if "bt_manual_df" not in st.session_state:
-                st.session_state["bt_manual_df"] = manual_template
-            manual_df = st.data_editor(st.session_state["bt_manual_df"], num_rows="dynamic", use_container_width=True, key="bt_manual_editor", column_config={"Richtung": st.column_config.SelectboxColumn(options=["LONG", "SHORT"]), "Einstieg": st.column_config.TextColumn(help="Datum YYYY-MM-DD"), "Ausstieg": st.column_config.TextColumn(help="Datum YYYY-MM-DD")})
-            if st.button("Manuelle Trades berechnen", use_container_width=True):
-                rows=[]; cost_rate=float(st.session_state.get("bt_cost_rate", 0.0001))
-                for _, r in manual_df.iterrows():
-                    try:
-                        ep=float(r["Einstiegskurs"]); xp=float(r["Ausstiegskurs"])
-                        if ep <= 0 or xp <= 0: continue
-                        direction=1 if str(r["Richtung"]).upper()=="LONG" else -1
-                        gross=direction*(xp/ep-1); net=gross-2*cost_rate
-                        rows.append({"Einstieg":str(r["Einstieg"]),"Ausstieg":str(r["Ausstieg"]),"Richtung":"LONG" if direction>0 else "SHORT","Einstiegskurs":ep,"Ausstiegskurs":xp,"Rendite netto %":net*100,"PnL":float(st.session_state.get("bt_start_capital",10000))*float(risk_pct)/100*net})
-                    except Exception:
-                        continue
-                st.session_state["bt_trades"] = pd.DataFrame(rows)
-                st.rerun()
-        trade_df = st.session_state.get("bt_trades", pd.DataFrame()).copy()
-        if st.session_state.get("bt_mode") == "Regelbasierte Strategie":
-            bp["peak"] = bp["equity"].cummax(); bp["drawdown"] = bp["equity"]/bp["peak"]-1
-            total_return=float(bp["equity"].iloc[-1]/float(st.session_state.get("bt_start_capital",10000))-1)
-            max_dd=float(bp["drawdown"].min())
-            daily=bp["net_return"].dropna()
-            sharpe=float(np.sqrt(252)*daily.mean()/daily.std()) if daily.std() and np.isfinite(daily.std()) else 0.0
-            wins=float((trade_df["Rendite netto %"]>0).mean()*100) if not trade_df.empty else 0.0
-            m1,m2,m3,m4,m5=st.columns(5)
-            m1.metric("Endkapital", f"{bp['equity'].iloc[-1]:,.2f}")
-            m2.metric("Gesamtrendite", f"{total_return*100:.2f}%")
-            m3.metric("Max. Drawdown", f"{max_dd*100:.2f}%")
-            m4.metric("Trades", str(len(trade_df)))
-            m5.metric("Trefferquote", f"{wins:.1f}%")
-            fig=go.Figure(); fig.add_trace(go.Scatter(x=bp["date"],y=bp["equity"],name="Equity",line=dict(color="#00d68f",width=2))); fig.update_layout(title="Equity-Kurve",template="plotly_dark",height=330,margin=dict(l=10,r=10,t=45,b=10)); st.plotly_chart(fig,use_container_width=True)
-            figdd=go.Figure(); figdd.add_trace(go.Scatter(x=bp["date"],y=bp["drawdown"]*100,name="Drawdown %",fill="tozeroy",line=dict(color="#ff2447"))); figdd.update_layout(title="Drawdown-Verlauf",template="plotly_dark",height=250,margin=dict(l=10,r=10,t=45,b=10)); st.plotly_chart(figdd,use_container_width=True)
-            st.caption(f"Markt: {st.session_state.get('bt_asset')} · Regel: {strategy} · Kostenmodell: Spread {spread_bps:g} + Gebühren {fee_bps:g} + Slippage {slippage_bps:g} Basispunkte je Seite. Yahoo Finance-Daten können unvollständig/verzögert sein.")
-        else:
-            if not trade_df.empty and "Rendite netto %" in trade_df:
-                pnl=trade_df.get("PnL", pd.Series(dtype=float)).sum(); wins=(trade_df["Rendite netto %"]>0).mean()*100
-                st.columns(3)[0].metric("Trades",len(trade_df)); st.columns(3)[1].metric("Summe PnL",f"{pnl:,.2f}"); st.columns(3)[2].metric("Trefferquote",f"{wins:.1f}%")
-        st.markdown("#### Einzeltrades")
-        if trade_df.empty:
-            st.info("Noch keine abgeschlossenen Trades. Bei manuellen Trades bitte Ein- und Ausstiege eintragen und berechnen.")
-        else:
-            st.dataframe(trade_df, use_container_width=True, hide_index=True)
-            st.download_button("Trades als CSV exportieren", trade_df.to_csv(index=False).encode("utf-8"), file_name="backtest_trades.csv", mime="text/csv")
-        with st.expander("Historische Kursdaten anzeigen"):
-            st.dataframe(bp.tail(500), use_container_width=True, hide_index=True)
 
 elif page in ("FX Signal", "FX Macro"):
     st.subheader("Forex Bias Engine")
@@ -1355,29 +1230,171 @@ elif page == "ML Lab":
             st.error(f"ML Lab fehlgeschlagen: {exc}")
 
 elif page == "Saisonalität":
-    st.subheader("Monatliche Saisonalität")
+    st.subheader("Seasonality Analytics — historische Wahrscheinlichkeiten, Backtest & Risiko")
+    st.caption("Nur echte historische Kursdaten aus der vorhandenen load_market_history()-Datenquelle. Keine synthetischen Kurswerte. Überlappende Zeitfenster können statistisch abhängig sein; Ergebnisse sind keine Garantie.")
     symbols = {name: info["symbol"] for name, info in FX_PAIRS.items()}
-    label = st.selectbox("Instrument / Proxy", list(symbols))
-    years = st.selectbox("Historie", ["5y", "10y", "max"], index=1)
-    if st.button("Historische Daten laden und berechnen"):
-        with st.spinner("Lade historische Daten…"):
+    c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+    with c1:
+        label = st.selectbox("Instrument / Proxy", list(symbols), key="seasonality_symbol")
+    with c2:
+        years = st.selectbox("Historie", ["5y", "10y", "max"], index=1, key="seasonality_years")
+    with c3:
+        horizon = st.selectbox("Haltedauer", [5, 10, 20, 30, 60], index=3, format_func=lambda x: f"{x} Handelstage", key="seasonality_horizon")
+    with c4:
+        cost_bps = st.number_input("Kosten (bps pro Trade)", min_value=0.0, max_value=100.0, value=2.0, step=0.5, key="seasonality_costs")
+    month_names = {i + 1: MONTHS[i] for i in range(12)}
+    c5, c6, c7 = st.columns(3)
+    with c5:
+        start_month = st.selectbox("Saisonfenster Startmonat", list(range(1, 13)), index=10, format_func=lambda x: month_names[x], key="season_start_month")
+    with c6:
+        start_day = st.number_input("Starttag", min_value=1, max_value=28, value=14, key="season_start_day")
+    with c7:
+        end_month = st.selectbox("Saisonfenster Endmonat", list(range(1, 13)), index=11, format_func=lambda x: month_names[x], key="season_end_month")
+
+    if st.button("Historie laden & Seasonality vollständig berechnen", type="primary", key="run_seasonality_plus"):
+        with st.spinner("Lade historische Kurse und berechne Kalender, Wahrscheinlichkeiten und Backtest…"):
             try:
                 prices = load_market_history(symbols[label], years)
-                if prices.empty:
-                    st.error("Keine Daten erhalten. Symbol oder Anbieter prüfen.")
+                if prices.empty or not {"date", "close"}.issubset(prices.columns):
+                    st.error("Keine gültigen historischen Kursdaten erhalten. Datenquelle/Symbol prüfen.")
                 else:
-                    result = seasonality(prices)
-                    result["Monat"] = result["month"].map(lambda m: MONTHS[int(m)-1])
-                    result["Ø Rendite (%)"] = result["avg_return"] * 100
-                    result["Positive Jahre (%)"] = result["win_rate"] * 100
-                    st.caption(f"Quelle: yfinance/Yahoo Finance Wrapper · Abruf {utc_now()} · Historische Daten, kein garantierter Echtzeitfeed. Symbol: {symbols[label]}")
-                    fig = px.bar(result, x="Monat", y="Ø Rendite (%)", color="Ø Rendite (%)", title=f"{label} — durchschnittliche Monatsrendite")
-                    st.plotly_chart(fig, use_container_width=True)
-                    st.dataframe(result[["Monat", "Ø Rendite (%)", "Positive Jahre (%)", "observations", "median", "volatility"]], use_container_width=True, hide_index=True)
+                    d = prices.copy()
+                    d["date"] = pd.to_datetime(d["date"], errors="coerce")
+                    d["close"] = pd.to_numeric(d["close"], errors="coerce")
+                    d = d.dropna(subset=["date", "close"]).sort_values("date").drop_duplicates("date")
+                    d = d[d["close"] > 0].set_index("date")
+                    close = d["close"].astype(float).resample("B").last().ffill(limit=2).dropna()
+                    daily_ret = close.pct_change().dropna()
+                    if len(close) < max(100, horizon * 3):
+                        st.warning(f"Nur {len(close)} tägliche Kursbeobachtungen verfügbar. Die Schätzungen können instabil sein.")
+                    forward_ret = close.shift(-int(horizon)) / close - 1.0
+                    bt = pd.DataFrame({"close": close, "forward_return_gross": forward_ret}).dropna()
+                    # Cost is deducted once for a round-trip approximation; user controls assumption.
+                    bt["forward_return_net"] = bt["forward_return_gross"] - (float(cost_bps) / 10000.0)
+                    bt["win"] = bt["forward_return_net"] > 0
+                    bt["year"] = bt.index.year
+                    bt["month"] = bt.index.month
+                    bt["weekday"] = bt.index.day_name()
+                    bt["day_of_month"] = bt.index.day
+                    bt["season_window"] = (
+                        ((bt.index.month == int(start_month)) & (bt.index.day >= int(start_day))) |
+                        ((bt.index.month > int(start_month)) & (bt.index.month < int(end_month))) |
+                        ((bt.index.month == int(end_month)) & (bt.index.day <= 13))
+                    ) if int(start_month) <= int(end_month) else (
+                        ((bt.index.month == int(start_month)) & (bt.index.day >= int(start_day))) |
+                        (bt.index.month > int(start_month)) | (bt.index.month < int(end_month)) |
+                        ((bt.index.month == int(end_month)) & (bt.index.day <= 13))
+                    )
+                    sample = bt[bt["season_window"]].copy()
+                    if sample.empty:
+                        st.warning("Für dieses Saisonfenster liegen keine auswertbaren historischen Ergebnisse vor.")
+                    else:
+                        n = len(sample)
+                        wins = int(sample["win"].sum())
+                        win_rate = wins / n
+                        # Wilson 95% confidence interval for a binomial proportion.
+                        z = 1.96
+                        denom = 1 + z*z/n
+                        center = (win_rate + z*z/(2*n)) / denom
+                        margin = z * np.sqrt((win_rate*(1-win_rate)/n) + z*z/(4*n*n)) / denom
+                        ci_low, ci_high = max(0.0, center-margin), min(1.0, center+margin)
+                        mean_ret = float(sample["forward_return_net"].mean())
+                        median_ret = float(sample["forward_return_net"].median())
+                        avg_win = sample.loc[sample["forward_return_net"] > 0, "forward_return_net"].mean()
+                        avg_loss = sample.loc[sample["forward_return_net"] <= 0, "forward_return_net"].mean()
+                        gross_profit = sample.loc[sample["forward_return_net"] > 0, "forward_return_net"].sum()
+                        gross_loss = -sample.loc[sample["forward_return_net"] <= 0, "forward_return_net"].sum()
+                        profit_factor = gross_profit / gross_loss if gross_loss > 0 else np.nan
+                        vol = float(sample["forward_return_net"].std(ddof=1)) if n > 1 else np.nan
+                        # Year-level outcomes are more interpretable for the selected calendar window.
+                        yearly = sample.groupby("year")["forward_return_net"].agg(["mean", "median", "count"])
+                        yearly["win"] = yearly["mean"] > 0
+                        year_n = len(yearly)
+                        year_win_rate = float(yearly["win"].mean()) if year_n else np.nan
+                        running = (1 + sample.sort_index()["forward_return_net"]).cumprod()
+                        drawdown = running / running.cummax() - 1
+                        max_dd = float(drawdown.min()) if len(drawdown) else np.nan
+
+                        st.caption(f"Quelle: vorhandene Kursdatenfunktion (Yahoo Finance/yfinance Wrapper) · Symbol {symbols[label]} · Abruf {utc_now()} · {d.index.min().date()} bis {d.index.max().date()} · {len(d):,} valide Kursbeobachtungen. Historie kann Lücken enthalten.")
+                        st.markdown("#### Ergebnis für das ausgewählte Saisonfenster")
+                        m1, m2, m3, m4 = st.columns(4)
+                        m1.metric("Gewinnquote", f"{win_rate:.1%}", help="Anteil der ausgewerteten Starttage mit positiver Netto-Rendite nach angenommener Kostenbelastung.")
+                        m2.metric("95%-Konfidenzintervall", f"{ci_low:.1%}–{ci_high:.1%}", help="Wilson-Intervall für die beobachtete Trefferquote. Überlappende Horizonte verletzen die Unabhängigkeitsannahme; daher nur als Orientierung.")
+                        m3.metric("Ø Netto-Rendite", f"{mean_ret:.2%}")
+                        m4.metric("Stichprobe", f"{n:,}", help="Auswertbare Starttage innerhalb des Saisonfensters; nicht gleichbedeutend mit unabhängigen Trades.")
+                        m1, m2, m3, m4 = st.columns(4)
+                        m1.metric("Median Netto-Rendite", f"{median_ret:.2%}")
+                        m2.metric("Ø Gewinn", "—" if pd.isna(avg_win) else f"{avg_win:.2%}")
+                        m3.metric("Ø Verlust", "—" if pd.isna(avg_loss) else f"{avg_loss:.2%}")
+                        m4.metric("Profit Factor", "—" if pd.isna(profit_factor) else f"{profit_factor:.2f}")
+                        st.caption(f"Kostenannahme: {cost_bps:.1f} Basispunkte je Hin-und-zurück-Trade (vereinfachte Annahme). Renditehorizont: {horizon} Handelstage ab jeweiligem Startdatum.")
+
+                        tabs = st.tabs(["Saisonfenster-Backtest", "Kalender-Heatmap", "Renditeverteilung", "Risiko & Datenqualität"])
+                        with tabs[0]:
+                            st.markdown("##### Ergebnis je Kalenderjahr")
+                            st.caption("Je Jahr wird der Mittelwert der Netto-Forward-Renditen der Starttage im gewählten Saisonfenster ausgewiesen. Viele Starttage pro Jahr überlappen sich bei langen Haltedauern.")
+                            yr = yearly.reset_index().rename(columns={"year":"Jahr", "mean":"Ø Netto-Rendite", "median":"Median", "count":"Beobachtungen", "win":"Jahr positiv"})
+                            st.dataframe(yr.style.format({"Ø Netto-Rendite":"{:.2%}", "Median":"{:.2%}"}), use_container_width=True, hide_index=True)
+                            if year_n:
+                                a, b, c = st.columns(3)
+                                a.metric("Positive Jahre", f"{int(yearly['win'].sum())}/{year_n}")
+                                b.metric("Jahres-Trefferquote", f"{year_win_rate:.1%}")
+                                c.metric("Schlechtester Jahresmittelwert", f"{yearly['mean'].min():.2%}")
+                            fig_year = px.bar(yr, x="Jahr", y="Ø Netto-Rendite", color="Ø Netto-Rendite", title="Saisonfenster — durchschnittliche Netto-Forward-Rendite je Jahr")
+                            st.plotly_chart(fig_year, use_container_width=True)
+                            detail = sample[["close", "forward_return_gross", "forward_return_net", "win"]].copy().reset_index(names="Startdatum")
+                            detail["Treffer"] = np.where(detail["win"], "Gewinn", "Verlust")
+                            st.markdown("##### Einzelne historische Startpunkte")
+                            st.dataframe(detail.sort_values("Startdatum", ascending=False).head(300).style.format({"close":"{:.5f}", "forward_return_gross":"{:.2%}", "forward_return_net":"{:.2%}"}), use_container_width=True, hide_index=True)
+                            st.download_button("Backtest-Zeilen als CSV herunterladen", data=detail.to_csv(index=False).encode("utf-8"), file_name="seasonality_backtest.csv", mime="text/csv")
+                        with tabs[1]:
+                            st.markdown("##### Monats- und Wochentagsmuster")
+                            calendar = bt.copy()
+                            calendar["Monat"] = calendar.index.month.map(month_names)
+                            calendar["Wochentag"] = calendar.index.dayofweek.map({0:"Mo",1:"Di",2:"Mi",3:"Do",4:"Fr"})
+                            heat = calendar.pivot_table(index="Monat", columns="Wochentag", values="forward_return_net", aggfunc="mean")
+                            heat = heat.reindex([month_names[i] for i in range(1,13)])
+                            fig_heat = px.imshow(heat * 100, aspect="auto", color_continuous_midpoint=0, labels=dict(color="Ø Netto-Rendite (%)"), title="Durchschnittliche Forward-Rendite nach Startmonat und Wochentag")
+                            st.plotly_chart(fig_heat, use_container_width=True)
+                            monthly = calendar.groupby("Monat")["forward_return_net"].agg(["mean","median","count"])
+                            monthly["Trefferquote"] = calendar.groupby("Monat")["win"].mean()
+                            monthly = monthly.rename(columns={"mean":"Ø Netto-Rendite","median":"Median","count":"Beobachtungen"}).reset_index()
+                            st.dataframe(monthly.style.format({"Ø Netto-Rendite":"{:.2%}","Median":"{:.2%}","Trefferquote":"{:.1%}"}), use_container_width=True, hide_index=True)
+                            weekday = calendar.groupby("Wochentag")["forward_return_net"].agg(["mean","median","count"])
+                            weekday["Trefferquote"] = calendar.groupby("Wochentag")["win"].mean()
+                            st.markdown("##### Wochentag-Statistik")
+                            st.dataframe(weekday.rename(columns={"mean":"Ø Netto-Rendite","median":"Median","count":"Beobachtungen"}).style.format({"Ø Netto-Rendite":"{:.2%}","Median":"{:.2%}","Trefferquote":"{:.1%}"}), use_container_width=True)
+                        with tabs[2]:
+                            st.markdown("##### Verteilung der Renditen im Saisonfenster")
+                            fig_dist = px.histogram(sample, x="forward_return_net", nbins=35, title="Netto-Forward-Rendite — Stichprobenverteilung")
+                            fig_dist.add_vline(x=0, line_dash="dash", line_color="white")
+                            fig_dist.update_layout(xaxis_tickformat=".1%")
+                            st.plotly_chart(fig_dist, use_container_width=True)
+                            st.markdown("##### Kumulierte Rendite (sequenzielle Näherung)")
+                            seq = sample.sort_index().copy()
+                            seq["equity"] = (1 + seq["forward_return_net"]).cumprod()
+                            fig_eq = px.line(seq, x=seq.index, y="equity", title="Kumulierte Equity — überlappende Trades, nur illustrativ")
+                            st.plotly_chart(fig_eq, use_container_width=True)
+                            st.warning("Die Equity-Kurve verwendet überlappende Forward-Renditen als Folge von Trades und ist deshalb keine realistische Portfolio-Simulation. Für eine handelbare Equity-Kurve braucht es explizite Ein-/Ausstiegsregeln und nicht überlappende Positionen.")
+                        with tabs[3]:
+                            st.markdown("##### Risiko-Kennzahlen")
+                            r1, r2, r3, r4 = st.columns(4)
+                            r1.metric("Volatilität der Forward-Renditen", "—" if pd.isna(vol) else f"{vol:.2%}")
+                            r2.metric("Max. Drawdown (indikativ)", "—" if pd.isna(max_dd) else f"{max_dd:.2%}")
+                            r3.metric("Beste Einzelbeobachtung", f"{sample['forward_return_net'].max():.2%}")
+                            r4.metric("Schlechteste Einzelbeobachtung", f"{sample['forward_return_net'].min():.2%}")
+                            st.markdown("##### Datenqualität")
+                            gap_count = int((d.index.to_series().diff().dt.days > 4).sum())
+                            st.write(f"- Valide Kurszeilen: **{len(d):,}**")
+                            st.write(f"- Größere Datumsabstände über 4 Kalendertage: **{gap_count}** (Wochenenden/Feiertage können enthalten sein)")
+                            st.write(f"- Tatsächlicher historischer Bereich: **{d.index.min().date()} bis {d.index.max().date()}**")
+                            st.write(f"- Auswertbare Beobachtungen im Saisonfenster: **{n:,}**")
+                            st.write(f"- Positive Kalenderjahre: **{int(yearly['win'].sum()) if year_n else 0}/{year_n}**")
+                            st.warning("Die Konfidenzgrenzen beruhen auf einer einfachen binomialen Näherung. Da Tagesstarts und Forward-Horizonte überlappen, sind die Ergebnisse nicht unabhängig und die Unsicherheit kann größer sein als das Intervall suggeriert.")
             except Exception as e:
-                st.error(f"Download/Berechnung fehlgeschlagen: {e}")
+                st.error(f"Seasonality-Berechnung fehlgeschlagen: {e}")
     else:
-        st.info("Klicke auf „Historische Daten laden und berechnen“, um Saisonalität aus historischen Kursdaten zu berechnen. Die Daten sind nicht garantiert vollständig oder börsenoffiziell.")
+        st.info("Wähle Instrument, Historie, Haltedauer und Kostenannahme und lade dann die echten historischen Kursdaten. Statistiken werden erst nach erfolgreichem Datenabruf berechnet; fehlende Kursdaten werden nicht durch Beispielwerte ersetzt.")
 
 elif page == "COT / Positioning":
     st.subheader("COT / Positioning")
