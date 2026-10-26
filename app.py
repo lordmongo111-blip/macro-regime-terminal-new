@@ -481,7 +481,7 @@ st.warning("Datenstatus: Ohne konfigurierte Datenquelle werden keine aktuellen M
 with st.sidebar:
     st.markdown('<div class="brand"><div class="logo"><span>◇</span></div><div><div class="brand-title" style="font-size:16px">MACRO / REGIME</div><div class="brand-sub" style="font-size:10px">FX · Makro · COT · Quant</div></div></div>', unsafe_allow_html=True)
     st.header("Einstellungen")
-    page = st.radio("Modul", ["Übersicht", "FX Signal", "ML Lab", "Saisonalität", "COT / Positioning", "NQ & ES", "Quant & Regression", "Datenquellen"])
+    page = st.radio("Modul", ["Übersicht", "FX Signal", "ML Lab", "Saisonalität", "COT / Positioning", "NQ & ES", "Quant & Regression", "Paper Trading", "Datenquellen"])
     st.divider()
     try:
         saved_fred_key = st.secrets.get("FRED_API_KEY", "")
@@ -1593,6 +1593,120 @@ elif page == "Quant & Regression":
             st.caption("Es werden keine synthetischen Werte als Ersatz angezeigt. Prüfe die Datenverbindung, Symbolverfügbarkeit und installierte yfinance-Version.")
     st.markdown("#### Risk regime inputs")
     st.write("Noch nicht bewertet: Aktienbreite, Realrenditen, Kreditspreads, Dollartrend und Volatilität. Keine Risk-on/off-Klassifikation ohne verifizierte Inputs.")
+
+elif page == "Paper Trading":
+    st.subheader("Fundamental Bias & Paper Trading")
+    st.caption("Entscheidungshilfe und Journal – keine Live-Orders. Der Bias ist ein transparenter, manuell bewerteter Überblick und keine automatisch validierte Prognose.")
+
+    st.markdown("### 1. Fundamental Bias")
+    st.write("Bewerte die verfügbaren Komponenten anhand deiner aktuellen Analyse. Nicht geprüfte oder fehlende Informationen auf ‚Neutral / nicht verfügbar‘ lassen.")
+    bias_cols = st.columns(4)
+    bias_options = ["Bullish", "Neutral / nicht verfügbar", "Bearish"]
+    with bias_cols[0]:
+        macro_bias = st.selectbox("Makro", bias_options, index=1, key="pt_macro_bias")
+    with bias_cols[1]:
+        cot_bias = st.selectbox("COT / Positionierung", bias_options, index=1, key="pt_cot_bias")
+    with bias_cols[2]:
+        seasonal_bias = st.selectbox("Saisonalität", bias_options, index=1, key="pt_seasonal_bias")
+    with bias_cols[3]:
+        trend_bias = st.selectbox("Trend / Preis", bias_options, index=1, key="pt_trend_bias")
+
+    def _bias_score(v):
+        return 1 if v == "Bullish" else (-1 if v == "Bearish" else 0)
+    _bias_values = [macro_bias, cot_bias, seasonal_bias, trend_bias]
+    _bias_scores = [_bias_score(v) for v in _bias_values]
+    _bias_sum = sum(_bias_scores)
+    _bias_valid = sum(v != "Neutral / nicht verfügbar" for v in _bias_values)
+    if _bias_valid < 2:
+        _bias_label, _bias_color = "UNBESTIMMT", "#94a3b8"
+        _bias_reason = "Mindestens zwei Komponenten müssen bewertet sein. Fehlende Daten werden nicht als neutrale Marktbelege interpretiert."
+    elif _bias_sum >= 2:
+        _bias_label, _bias_color = "BULLISH BIAS", "#2ecf91"
+        _bias_reason = "Mehrheit der bewerteten Komponenten spricht auf dieser vereinfachten Skala nach oben."
+    elif _bias_sum <= -2:
+        _bias_label, _bias_color = "BEARISH BIAS", "#ff6b6b"
+        _bias_reason = "Mehrheit der bewerteten Komponenten spricht auf dieser vereinfachten Skala nach unten."
+    else:
+        _bias_label, _bias_color = "MIXED / NEUTRAL", "#f4bd50"
+        _bias_reason = "Die bewerteten Komponenten sind gemischt oder zu schwach für eine klare Richtung."
+    _bc1, _bc2, _bc3 = st.columns([1.2, 1, 2])
+    _bc1.metric("Fundamental Bias", _bias_label)
+    _bc2.metric("Bewertete Komponenten", f"{_bias_valid}/4")
+    _bc3.markdown(f'<div style="border:1px solid #263849;border-radius:10px;padding:12px;color:{_bias_color};min-height:60px">{_bias_reason}</div>', unsafe_allow_html=True)
+    st.caption("Diese einfache Abstimmung ist bewusst kein Backtest oder automatischer Daten-Score. Vor einer Nutzung als Entscheidungshilfe sollten die Regeln dokumentiert und mit historischen Daten geprüft werden.")
+
+    st.divider()
+    st.markdown("### 2. Paper-Trade erfassen")
+    if "paper_trades" not in st.session_state:
+        st.session_state["paper_trades"] = []
+    with st.form("paper_trade_entry_form", clear_on_submit=True):
+        _c1, _c2, _c3 = st.columns(3)
+        _instrument = _c1.text_input("Instrument", value="EUR/USD", help="Beispiel: EUR/USD, NQ, ES, Gold")
+        _direction = _c2.selectbox("Richtung", ["Long", "Short"])
+        _status = _c3.selectbox("Status", ["Geplant", "Offen", "Geschlossen"])
+        _c4, _c5, _c6 = st.columns(3)
+        _entry = _c4.number_input("Entry", min_value=0.0, value=1.0, format="%.6f")
+        _stop = _c5.number_input("Stop-Loss (optional: 0 = leer)", min_value=0.0, value=0.0, format="%.6f")
+        _target = _c6.number_input("Take-Profit (optional: 0 = leer)", min_value=0.0, value=0.0, format="%.6f")
+        _c7, _c8, _c9 = st.columns(3)
+        _size = _c7.number_input("Positionsgröße / Einheiten", min_value=0.0, value=1.0, format="%.4f")
+        _risk_pct = _c8.number_input("Geplantes Risiko (%)", min_value=0.0, max_value=100.0, value=1.0, step=0.25)
+        _bias_at_entry = _c9.selectbox("Bias bei Erfassung", ["Bullish", "Bearish", "Mixed / Neutral", "Unbestimmt"], index=["BULLISH BIAS", "BEARISH BIAS", "MIXED / NEUTRAL", "UNBESTIMMT"].index(_bias_label))
+        _notes = st.text_input("Setup / Notiz", placeholder="z. B. Makro-Bias bestätigt, Entry nach Retest")
+        _submit_trade = st.form_submit_button("Paper-Trade speichern", type="primary")
+    if _submit_trade:
+        if not _instrument.strip():
+            st.error("Bitte ein Instrument angeben.")
+        elif _entry <= 0:
+            st.error("Entry muss größer als 0 sein.")
+        elif _direction == "Long" and ((_stop > 0 and _stop >= _entry) or (_target > 0 and _target <= _entry)):
+            st.error("Bei Long muss der Stop unter Entry und das Ziel über Entry liegen.")
+        elif _direction == "Short" and ((_stop > 0 and _stop <= _entry) or (_target > 0 and _target >= _entry)):
+            st.error("Bei Short muss der Stop über Entry und das Ziel unter Entry liegen.")
+        else:
+            import uuid as _uuid
+            st.session_state["paper_trades"].append({
+                "ID": _uuid.uuid4().hex[:8], "Erstellt (UTC)": pd.Timestamp.now(tz="UTC").isoformat(),
+                "Instrument": _instrument.strip().upper(), "Richtung": _direction, "Status": _status,
+                "Entry": float(_entry), "Stop": float(_stop) if _stop > 0 else np.nan,
+                "Ziel": float(_target) if _target > 0 else np.nan, "Positionsgröße": float(_size),
+                "Risiko (%)": float(_risk_pct), "Bias": _bias_at_entry, "Setup / Notiz": _notes.strip(),
+                "Exit": np.nan, "Ergebnis (R)": np.nan, "Ergebnis (%)": np.nan
+            })
+            st.success("Paper-Trade im aktuellen App-Sitz gespeichert. Es wurde keine Order an einen Broker gesendet.")
+            st.rerun()
+
+    _trades = st.session_state["paper_trades"]
+    if _trades:
+        st.markdown("### 3. Journal und Ergebnisse")
+        _trade_df = pd.DataFrame(_trades)
+        _m1, _m2, _m3, _m4 = st.columns(4)
+        _m1.metric("Paper-Trades", len(_trade_df))
+        _m2.metric("Offen / geplant", int(_trade_df["Status"].isin(["Offen", "Geplant"]).sum()))
+        _closed = _trade_df.loc[_trade_df["Status"] == "Geschlossen"].copy()
+        _m3.metric("Geschlossen", len(_closed))
+        _wr = np.nan
+        if "Ergebnis (R)" in _closed and _closed["Ergebnis (R)"].notna().any():
+            _wr = (_closed["Ergebnis (R)"].dropna() > 0).mean() * 100
+        _m4.metric("Gewinnrate (mit Exit-Daten)", "—" if pd.isna(_wr) else f"{_wr:.1f}%")
+        st.caption("Für geschlossene Trades Exit und Ergebnis im Editor ergänzen. R-Multiple wird nicht automatisch geschätzt, wenn Stop/Exit oder Tick-/Kontraktwert nicht zuverlässig bekannt sind.")
+        _edited = st.data_editor(_trade_df, use_container_width=True, hide_index=True, num_rows="fixed", key="paper_trade_editor", column_config={
+            "Status": st.column_config.SelectboxColumn("Status", options=["Geplant", "Offen", "Geschlossen"]),
+            "Richtung": st.column_config.SelectboxColumn("Richtung", options=["Long", "Short"]),
+            "Exit": st.column_config.NumberColumn("Exit", min_value=0.0, format="%.6f"),
+            "Ergebnis (R)": st.column_config.NumberColumn("Ergebnis (R)", format="%.2f"),
+            "Ergebnis (%)": st.column_config.NumberColumn("Ergebnis (%)", format="%.2f")
+        })
+        if st.button("Änderungen im Journal übernehmen", type="primary"):
+            st.session_state["paper_trades"] = _edited.to_dict(orient="records")
+            st.success("Journal aktualisiert.")
+            st.rerun()
+        st.download_button("Paper-Trading-Journal als CSV herunterladen", data=_trade_df.to_csv(index=False).encode("utf-8-sig"), file_name="macro_regime_paper_trading_journal.csv", mime="text/csv")
+        if st.button("Alle Paper-Trades löschen", type="secondary"):
+            st.session_state["paper_trades"] = []
+            st.rerun()
+    else:
+        st.info("Noch keine Paper-Trades erfasst. Das Journal wird in der aktuellen Streamlit-Sitzung gehalten; exportiere es regelmäßig als CSV, um deine Daten dauerhaft zu sichern.")
 
 else:
     st.subheader("Datenquellen & Aktualität")
