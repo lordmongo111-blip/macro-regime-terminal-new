@@ -1230,10 +1230,10 @@ elif page == "ML Lab":
             st.error(f"ML Lab fehlgeschlagen: {exc}")
 
 elif page == "Saisonalität":
-    st.subheader("Seasonality Analytics — historische Wahrscheinlichkeiten, Backtest & Risiko")
-    st.caption("Nur echte historische Kursdaten aus der vorhandenen load_market_history()-Datenquelle. Keine synthetischen Kurswerte. Überlappende Zeitfenster können statistisch abhängig sein; Ergebnisse sind keine Garantie.")
+    st.subheader("Seasonality Terminal")
+    st.caption("Interaktive historische Saisonalität auf Basis realer Kursdaten. Zeitraum im Chart zoomen oder über die Datumsfelder auswählen; Kennzahlen beziehen sich auf den ausgewählten saisonalen Bereich.")
     symbols = {name: info["symbol"] for name, info in FX_PAIRS.items()}
-    c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+    c1, c2, c3, c4 = st.columns([2.1, 1, 1, 1])
     with c1:
         label = st.selectbox("Instrument / Proxy", list(symbols), key="seasonality_symbol")
     with c2:
@@ -1241,161 +1241,150 @@ elif page == "Saisonalität":
     with c3:
         horizon = st.selectbox("Haltedauer", [5, 10, 20, 30, 60], index=3, format_func=lambda x: f"{x} Handelstage", key="seasonality_horizon")
     with c4:
-        cost_bps = st.number_input("Kosten (bps pro Trade)", min_value=0.0, max_value=100.0, value=2.0, step=0.5, key="seasonality_costs")
-    month_names = {i + 1: MONTHS[i] for i in range(12)}
-    c5, c6, c7 = st.columns(3)
-    with c5:
-        start_month = st.selectbox("Saisonfenster Startmonat", list(range(1, 13)), index=10, format_func=lambda x: month_names[x], key="season_start_month")
-    with c6:
-        start_day = st.number_input("Starttag", min_value=1, max_value=28, value=14, key="season_start_day")
-    with c7:
-        end_month = st.selectbox("Saisonfenster Endmonat", list(range(1, 13)), index=11, format_func=lambda x: month_names[x], key="season_end_month")
+        cost_bps = st.number_input("Kosten (bps Round-trip)", min_value=0.0, max_value=100.0, value=2.0, step=0.5, key="seasonality_costs")
 
-    if st.button("Historie laden & Seasonality vollständig berechnen", type="primary", key="run_seasonality_plus"):
-        with st.spinner("Lade historische Kurse und berechne Kalender, Wahrscheinlichkeiten und Backtest…"):
-            try:
-                prices = load_market_history(symbols[label], years)
-                if prices.empty or not {"date", "close"}.issubset(prices.columns):
-                    st.error("Keine gültigen historischen Kursdaten erhalten. Datenquelle/Symbol prüfen.")
+    if st.button("Historische Daten laden / aktualisieren", type="primary", key="run_seasonality_plus"):
+        st.session_state.pop("seasonality_loaded_data", None)
+        st.session_state.pop("seasonality_loaded_symbol", None)
+        try:
+            with st.spinner("Lade historische Kursdaten und berechne saisonales Profil …"):
+                raw_prices = load_market_history(symbols[label], years)
+            if raw_prices.empty or not {"date", "close"}.issubset(raw_prices.columns):
+                st.error("Keine gültigen historischen Kursdaten erhalten. Datenquelle oder Symbol prüfen.")
+            else:
+                st.session_state["seasonality_loaded_data"] = raw_prices.to_json(date_format="iso", orient="split")
+                st.session_state["seasonality_loaded_symbol"] = symbols[label]
+                st.session_state["seasonality_loaded_years"] = years
+        except Exception as e:
+            st.error(f"Historische Daten konnten nicht geladen werden: {e}")
+
+    if st.session_state.get("seasonality_loaded_data") and st.session_state.get("seasonality_loaded_symbol") == symbols[label] and st.session_state.get("seasonality_loaded_years") == years:
+        try:
+            raw = pd.read_json(st.session_state["seasonality_loaded_data"], orient="split")
+            raw["date"] = pd.to_datetime(raw["date"], errors="coerce")
+            raw["close"] = pd.to_numeric(raw["close"], errors="coerce")
+            raw = raw.dropna(subset=["date", "close"]).sort_values("date").drop_duplicates("date")
+            raw = raw[raw["close"] > 0]
+            prices = raw.set_index("date")["close"].astype(float).sort_index()
+            if len(prices) < 100:
+                st.warning("Es liegen weniger als 100 gültige Kursbeobachtungen vor; Kennzahlen sind möglicherweise instabil.")
+            prices.index = pd.to_datetime(prices.index).tz_localize(None)
+            daily = prices.pct_change().dropna()
+            # Normalize each calendar year to 100 at its first available observation.
+            seasonal_rows = []
+            for yr, series in prices.groupby(prices.index.year):
+                if len(series) < 30:
+                    continue
+                normalized = series / series.iloc[0] * 100.0
+                for dt, val in normalized.items():
+                    seasonal_rows.append({"date": dt, "year": int(yr), "day_of_year": int(dt.dayofyear), "month": int(dt.month), "seasonal_index": float(val)})
+            seasonal = pd.DataFrame(seasonal_rows)
+            if seasonal.empty:
+                st.warning("Für diese Auswahl ist nicht genug historische Historie verfügbar.")
+            else:
+                # Build the calendar-year average profile; dates are aligned by month/day, leap days are omitted.
+                seasonal["month_day"] = seasonal["date"].dt.strftime("%m-%d")
+                profile = seasonal[~seasonal["month_day"].eq("02-29")].groupby("month_day")["seasonal_index"].agg(["mean", "median", "count"]).reset_index()
+                profile["plot_date"] = pd.to_datetime("2000-" + profile["month_day"], errors="coerce")
+                profile = profile.dropna(subset=["plot_date"]).sort_values("plot_date")
+                # Date range controls are persisted and directly update every chart/statistic.
+                min_date, max_date = prices.index.min().date(), prices.index.max().date()
+                default_start = max(min_date, (pd.Timestamp(max_date) - pd.Timedelta(days=365)).date())
+                default_range = st.session_state.get("seasonality_date_range", (default_start, max_date))
+                if not isinstance(default_range, (tuple, list)) or len(default_range) != 2:
+                    default_range = (default_start, max_date)
+                default_range = (max(min_date, default_range[0]), min(max_date, default_range[1]))
+                st.markdown("#### Annual Seasonality")
+                st.caption("Der Jahreschart zeigt den durchschnittlichen Verlauf innerhalb eines Kalenderjahres (Start jedes Jahres = 100). Nutze den Plotly-Zoom/Range-Slider oder wähle den Analysezeitraum unten. Die Auswahl steuert die historische Auswertung.")
+                fig_season = go.Figure()
+                fig_season.add_trace(go.Scatter(x=profile["plot_date"], y=profile["mean"], mode="lines", name="Durchschnittlicher Verlauf", line=dict(color="#4db4ca", width=3), hovertemplate="%{x|%d %b}<br>Index: %{y:.2f}<br>Beobachtungen: %{customdata}<extra></extra>", customdata=profile["count"]))
+                fig_season.add_trace(go.Scatter(x=profile["plot_date"], y=profile["median"], mode="lines", name="Medianverlauf", line=dict(color="#8fa7b8", width=1.5, dash="dot"), hovertemplate="%{x|%d %b}<br>Medianindex: %{y:.2f}<extra></extra>"))
+                fig_season.update_layout(height=440, template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(10,22,34,.25)", margin=dict(l=10,r=10,t=40,b=10), legend=dict(orientation="h", y=1.08), xaxis=dict(tickformat="%b", dtick="M1", rangeslider=dict(visible=True), showgrid=True, gridcolor="rgba(130,160,180,.12)"), yaxis=dict(title="Saisonaler Index (Jahresstart = 100)", showgrid=True, gridcolor="rgba(130,160,180,.12)"), hovermode="x unified")
+                st.plotly_chart(fig_season, use_container_width=True, key="seasonality_annual_chart")
+
+                st.markdown("#### Analysezeitraum auswählen")
+                date_range = st.date_input("Wähle Start- und Enddatum für die Detailanalyse", value=default_range, min_value=min_date, max_value=max_date, key="seasonality_date_range")
+                if isinstance(date_range, (tuple, list)) and len(date_range) == 2:
+                    range_start, range_end = pd.Timestamp(date_range[0]), pd.Timestamp(date_range[1])
                 else:
-                    d = prices.copy()
-                    d["date"] = pd.to_datetime(d["date"], errors="coerce")
-                    d["close"] = pd.to_numeric(d["close"], errors="coerce")
-                    d = d.dropna(subset=["date", "close"]).sort_values("date").drop_duplicates("date")
-                    d = d[d["close"] > 0].set_index("date")
-                    close = d["close"].astype(float).resample("B").last().ffill(limit=2).dropna()
-                    daily_ret = close.pct_change().dropna()
-                    if len(close) < max(100, horizon * 3):
-                        st.warning(f"Nur {len(close)} tägliche Kursbeobachtungen verfügbar. Die Schätzungen können instabil sein.")
-                    forward_ret = close.shift(-int(horizon)) / close - 1.0
-                    bt = pd.DataFrame({"close": close, "forward_return_gross": forward_ret}).dropna()
-                    # Cost is deducted once for a round-trip approximation; user controls assumption.
-                    bt["forward_return_net"] = bt["forward_return_gross"] - (float(cost_bps) / 10000.0)
-                    bt["win"] = bt["forward_return_net"] > 0
-                    bt["year"] = bt.index.year
-                    bt["month"] = bt.index.month
-                    bt["weekday"] = bt.index.day_name()
-                    bt["day_of_month"] = bt.index.day
-                    bt["season_window"] = (
-                        ((bt.index.month == int(start_month)) & (bt.index.day >= int(start_day))) |
-                        ((bt.index.month > int(start_month)) & (bt.index.month < int(end_month))) |
-                        ((bt.index.month == int(end_month)) & (bt.index.day <= 13))
-                    ) if int(start_month) <= int(end_month) else (
-                        ((bt.index.month == int(start_month)) & (bt.index.day >= int(start_day))) |
-                        (bt.index.month > int(start_month)) | (bt.index.month < int(end_month)) |
-                        ((bt.index.month == int(end_month)) & (bt.index.day <= 13))
-                    )
-                    sample = bt[bt["season_window"]].copy()
-                    if sample.empty:
-                        st.warning("Für dieses Saisonfenster liegen keine auswertbaren historischen Ergebnisse vor.")
-                    else:
-                        n = len(sample)
-                        wins = int(sample["win"].sum())
-                        win_rate = wins / n
-                        # Wilson 95% confidence interval for a binomial proportion.
-                        z = 1.96
-                        denom = 1 + z*z/n
-                        center = (win_rate + z*z/(2*n)) / denom
-                        margin = z * np.sqrt((win_rate*(1-win_rate)/n) + z*z/(4*n*n)) / denom
-                        ci_low, ci_high = max(0.0, center-margin), min(1.0, center+margin)
-                        mean_ret = float(sample["forward_return_net"].mean())
-                        median_ret = float(sample["forward_return_net"].median())
-                        avg_win = sample.loc[sample["forward_return_net"] > 0, "forward_return_net"].mean()
-                        avg_loss = sample.loc[sample["forward_return_net"] <= 0, "forward_return_net"].mean()
-                        gross_profit = sample.loc[sample["forward_return_net"] > 0, "forward_return_net"].sum()
-                        gross_loss = -sample.loc[sample["forward_return_net"] <= 0, "forward_return_net"].sum()
-                        profit_factor = gross_profit / gross_loss if gross_loss > 0 else np.nan
-                        vol = float(sample["forward_return_net"].std(ddof=1)) if n > 1 else np.nan
-                        # Year-level outcomes are more interpretable for the selected calendar window.
-                        yearly = sample.groupby("year")["forward_return_net"].agg(["mean", "median", "count"])
-                        yearly["win"] = yearly["mean"] > 0
-                        year_n = len(yearly)
-                        year_win_rate = float(yearly["win"].mean()) if year_n else np.nan
-                        running = (1 + sample.sort_index()["forward_return_net"]).cumprod()
-                        drawdown = running / running.cummax() - 1
-                        max_dd = float(drawdown.min()) if len(drawdown) else np.nan
+                    range_start, range_end = pd.Timestamp(default_range[0]), pd.Timestamp(default_range[1])
+                if range_end < range_start:
+                    range_start, range_end = range_end, range_start
+                # Seasonal pattern means: evaluate the selected month/day window across every historical year.
+                start_md = range_start.strftime("%m-%d")
+                end_md = range_end.strftime("%m-%d")
+                dates = prices.index
+                md = dates.strftime("%m-%d")
+                if start_md <= end_md:
+                    mask = (md >= start_md) & (md <= end_md)
+                else:
+                    mask = (md >= start_md) | (md <= end_md)
+                # Forward returns are calculated from every available historical date, with costs deducted once per round trip.
+                forward = prices.shift(-int(horizon)) / prices - 1.0 - (float(cost_bps) / 10000.0)
+                bt = pd.DataFrame({"close": prices, "net_return": forward}).dropna()
+                bt["month_day"] = bt.index.strftime("%m-%d")
+                bt["year"] = bt.index.year
+                sample = bt[bt["month_day"].map(lambda x: (start_md <= x <= end_md) if start_md <= end_md else (x >= start_md or x <= end_md))].copy()
+                if sample.empty:
+                    st.warning("Für diesen saisonalen Zeitraum gibt es keine auswertbaren historischen Beobachtungen.")
+                else:
+                    sample["win"] = sample["net_return"] > 0
+                    n = len(sample)
+                    wins = int(sample["win"].sum())
+                    win_rate = wins / n
+                    mean_ret = float(sample["net_return"].mean())
+                    median_ret = float(sample["net_return"].median())
+                    avg_move = float((prices.shift(-int(horizon)) / prices - 1.0).loc[sample.index].abs().mean())
+                    avg_win = sample.loc[sample["net_return"] > 0, "net_return"].mean()
+                    avg_loss = sample.loc[sample["net_return"] <= 0, "net_return"].mean()
+                    gross_profit = sample.loc[sample["net_return"] > 0, "net_return"].sum()
+                    gross_loss = -sample.loc[sample["net_return"] <= 0, "net_return"].sum()
+                    profit_factor = gross_profit / gross_loss if gross_loss > 0 else np.nan
+                    annualized = (1 + mean_ret) ** (252 / max(1, int(horizon))) - 1 if mean_ret > -1 else np.nan
+                    st.caption(f"Quelle: historische Kursdaten · {symbols[label]} · {prices.index.min().date()} bis {prices.index.max().date()} · {len(prices):,} Kursbeobachtungen · Datenabruf {utc_now()}")
+                    k1, k2, k3, k4 = st.columns(4)
+                    k1.metric("Ø Netto-Rendite", f"{mean_ret:.2%}")
+                    k2.metric("Gewinnrate", f"{win_rate:.1%}", f"{wins} Gewinne / {n-wins} Verluste")
+                    k3.metric("Ø Kursbewegung", f"{avg_move:.2%}", help="Durchschnittlicher absoluter Kursmove über den gewählten Horizont; nicht dasselbe wie Rendite.")
+                    k4.metric("Annualisierte Rendite*", "—" if pd.isna(annualized) else f"{annualized:.2%}")
+                    k1, k2, k3, k4 = st.columns(4)
+                    k1.metric("Medianrendite", f"{median_ret:.2%}")
+                    k2.metric("Ø Gewinn", "—" if pd.isna(avg_win) else f"{avg_win:.2%}")
+                    k3.metric("Ø Verlust", "—" if pd.isna(avg_loss) else f"{avg_loss:.2%}")
+                    k4.metric("Profit Factor", "—" if pd.isna(profit_factor) else f"{profit_factor:.2f}")
+                    st.caption(f"Ausgewähltes Saisonfenster: {start_md} bis {end_md} · Haltedauer: {horizon} Handelstage · angenommene Round-trip-Kosten: {cost_bps:.1f} bps · *Annualisierung ist eine Näherung aus mittlerer Forward-Rendite und Haltedauer.")
 
-                        st.caption(f"Quelle: vorhandene Kursdatenfunktion (Yahoo Finance/yfinance Wrapper) · Symbol {symbols[label]} · Abruf {utc_now()} · {d.index.min().date()} bis {d.index.max().date()} · {len(d):,} valide Kursbeobachtungen. Historie kann Lücken enthalten.")
-                        st.markdown("#### Ergebnis für das ausgewählte Saisonfenster")
-                        m1, m2, m3, m4 = st.columns(4)
-                        m1.metric("Gewinnquote", f"{win_rate:.1%}", help="Anteil der ausgewerteten Starttage mit positiver Netto-Rendite nach angenommener Kostenbelastung.")
-                        m2.metric("95%-Konfidenzintervall", f"{ci_low:.1%}–{ci_high:.1%}", help="Wilson-Intervall für die beobachtete Trefferquote. Überlappende Horizonte verletzen die Unabhängigkeitsannahme; daher nur als Orientierung.")
-                        m3.metric("Ø Netto-Rendite", f"{mean_ret:.2%}")
-                        m4.metric("Stichprobe", f"{n:,}", help="Auswertbare Starttage innerhalb des Saisonfensters; nicht gleichbedeutend mit unabhängigen Trades.")
-                        m1, m2, m3, m4 = st.columns(4)
-                        m1.metric("Median Netto-Rendite", f"{median_ret:.2%}")
-                        m2.metric("Ø Gewinn", "—" if pd.isna(avg_win) else f"{avg_win:.2%}")
-                        m3.metric("Ø Verlust", "—" if pd.isna(avg_loss) else f"{avg_loss:.2%}")
-                        m4.metric("Profit Factor", "—" if pd.isna(profit_factor) else f"{profit_factor:.2f}")
-                        st.caption(f"Kostenannahme: {cost_bps:.1f} Basispunkte je Hin-und-zurück-Trade (vereinfachte Annahme). Renditehorizont: {horizon} Handelstage ab jeweiligem Startdatum.")
+                    left, right = st.columns([2.1, 1])
+                    with left:
+                        st.markdown("#### Kumulierte historische Rendite")
+                        yearly = sample.groupby("year")["net_return"].agg(["mean", "median", "count"])
+                        yearly["win_rate"] = sample.groupby("year")["win"].mean()
+                        yr = yearly.reset_index()
+                        fig_year = go.Figure()
+                        fig_year.add_trace(go.Bar(x=yr["year"], y=yr["mean"] * 100, name="Ø Rendite", marker_color="#4db4ca", hovertemplate="Jahr %{x}<br>Ø Rendite %{y:.2f}%<extra></extra>"))
+                        fig_year.add_hline(y=0, line_color="#dce7ef", line_width=1)
+                        fig_year.update_layout(height=300, template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(10,22,34,.25)", margin=dict(l=5,r=5,t=30,b=5), yaxis_title="Ø Netto-Rendite (%)", title="Rendite je historischem Jahr")
+                        st.plotly_chart(fig_year, use_container_width=True)
+                    with right:
+                        st.markdown("#### Pattern Returns")
+                        fig_dist = px.histogram(sample, x="net_return", nbins=24, color_discrete_sequence=["#4db4ca"])
+                        fig_dist.add_vline(x=0, line_dash="dash", line_color="#ff526d")
+                        fig_dist.update_layout(height=300, template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(10,22,34,.25)", margin=dict(l=5,r=5,t=30,b=5), xaxis_tickformat=".1%", xaxis_title="Netto-Forward-Rendite", yaxis_title="Häufigkeit")
+                        st.plotly_chart(fig_dist, use_container_width=True)
 
-                        tabs = st.tabs(["Saisonfenster-Backtest", "Kalender-Heatmap", "Renditeverteilung", "Risiko & Datenqualität"])
-                        with tabs[0]:
-                            st.markdown("##### Ergebnis je Kalenderjahr")
-                            st.caption("Je Jahr wird der Mittelwert der Netto-Forward-Renditen der Starttage im gewählten Saisonfenster ausgewiesen. Viele Starttage pro Jahr überlappen sich bei langen Haltedauern.")
-                            yr = yearly.reset_index().rename(columns={"year":"Jahr", "mean":"Ø Netto-Rendite", "median":"Median", "count":"Beobachtungen", "win":"Jahr positiv"})
-                            st.dataframe(yr.style.format({"Ø Netto-Rendite":"{:.2%}", "Median":"{:.2%}"}), use_container_width=True, hide_index=True)
-                            if year_n:
-                                a, b, c = st.columns(3)
-                                a.metric("Positive Jahre", f"{int(yearly['win'].sum())}/{year_n}")
-                                b.metric("Jahres-Trefferquote", f"{year_win_rate:.1%}")
-                                c.metric("Schlechtester Jahresmittelwert", f"{yearly['mean'].min():.2%}")
-                            fig_year = px.bar(yr, x="Jahr", y="Ø Netto-Rendite", color="Ø Netto-Rendite", title="Saisonfenster — durchschnittliche Netto-Forward-Rendite je Jahr")
-                            st.plotly_chart(fig_year, use_container_width=True)
-                            detail = sample[["close", "forward_return_gross", "forward_return_net", "win"]].copy().reset_index(names="Startdatum")
-                            detail["Treffer"] = np.where(detail["win"], "Gewinn", "Verlust")
-                            st.markdown("##### Einzelne historische Startpunkte")
-                            st.dataframe(detail.sort_values("Startdatum", ascending=False).head(300).style.format({"close":"{:.5f}", "forward_return_gross":"{:.2%}", "forward_return_net":"{:.2%}"}), use_container_width=True, hide_index=True)
-                            st.download_button("Backtest-Zeilen als CSV herunterladen", data=detail.to_csv(index=False).encode("utf-8"), file_name="seasonality_backtest.csv", mime="text/csv")
-                        with tabs[1]:
-                            st.markdown("##### Monats- und Wochentagsmuster")
-                            calendar = bt.copy()
-                            calendar["Monat"] = calendar.index.month.map(month_names)
-                            calendar["Wochentag"] = calendar.index.dayofweek.map({0:"Mo",1:"Di",2:"Mi",3:"Do",4:"Fr"})
-                            heat = calendar.pivot_table(index="Monat", columns="Wochentag", values="forward_return_net", aggfunc="mean")
-                            heat = heat.reindex([month_names[i] for i in range(1,13)])
-                            fig_heat = px.imshow(heat * 100, aspect="auto", color_continuous_midpoint=0, labels=dict(color="Ø Netto-Rendite (%)"), title="Durchschnittliche Forward-Rendite nach Startmonat und Wochentag")
-                            st.plotly_chart(fig_heat, use_container_width=True)
-                            monthly = calendar.groupby("Monat")["forward_return_net"].agg(["mean","median","count"])
-                            monthly["Trefferquote"] = calendar.groupby("Monat")["win"].mean()
-                            monthly = monthly.rename(columns={"mean":"Ø Netto-Rendite","median":"Median","count":"Beobachtungen"}).reset_index()
-                            st.dataframe(monthly.style.format({"Ø Netto-Rendite":"{:.2%}","Median":"{:.2%}","Trefferquote":"{:.1%}"}), use_container_width=True, hide_index=True)
-                            weekday = calendar.groupby("Wochentag")["forward_return_net"].agg(["mean","median","count"])
-                            weekday["Trefferquote"] = calendar.groupby("Wochentag")["win"].mean()
-                            st.markdown("##### Wochentag-Statistik")
-                            st.dataframe(weekday.rename(columns={"mean":"Ø Netto-Rendite","median":"Median","count":"Beobachtungen"}).style.format({"Ø Netto-Rendite":"{:.2%}","Median":"{:.2%}","Trefferquote":"{:.1%}"}), use_container_width=True)
-                        with tabs[2]:
-                            st.markdown("##### Verteilung der Renditen im Saisonfenster")
-                            fig_dist = px.histogram(sample, x="forward_return_net", nbins=35, title="Netto-Forward-Rendite — Stichprobenverteilung")
-                            fig_dist.add_vline(x=0, line_dash="dash", line_color="white")
-                            fig_dist.update_layout(xaxis_tickformat=".1%")
-                            st.plotly_chart(fig_dist, use_container_width=True)
-                            st.markdown("##### Kumulierte Rendite (sequenzielle Näherung)")
-                            seq = sample.sort_index().copy()
-                            seq["equity"] = (1 + seq["forward_return_net"]).cumprod()
-                            fig_eq = px.line(seq, x=seq.index, y="equity", title="Kumulierte Equity — überlappende Trades, nur illustrativ")
-                            st.plotly_chart(fig_eq, use_container_width=True)
-                            st.warning("Die Equity-Kurve verwendet überlappende Forward-Renditen als Folge von Trades und ist deshalb keine realistische Portfolio-Simulation. Für eine handelbare Equity-Kurve braucht es explizite Ein-/Ausstiegsregeln und nicht überlappende Positionen.")
-                        with tabs[3]:
-                            st.markdown("##### Risiko-Kennzahlen")
-                            r1, r2, r3, r4 = st.columns(4)
-                            r1.metric("Volatilität der Forward-Renditen", "—" if pd.isna(vol) else f"{vol:.2%}")
-                            r2.metric("Max. Drawdown (indikativ)", "—" if pd.isna(max_dd) else f"{max_dd:.2%}")
-                            r3.metric("Beste Einzelbeobachtung", f"{sample['forward_return_net'].max():.2%}")
-                            r4.metric("Schlechteste Einzelbeobachtung", f"{sample['forward_return_net'].min():.2%}")
-                            st.markdown("##### Datenqualität")
-                            gap_count = int((d.index.to_series().diff().dt.days > 4).sum())
-                            st.write(f"- Valide Kurszeilen: **{len(d):,}**")
-                            st.write(f"- Größere Datumsabstände über 4 Kalendertage: **{gap_count}** (Wochenenden/Feiertage können enthalten sein)")
-                            st.write(f"- Tatsächlicher historischer Bereich: **{d.index.min().date()} bis {d.index.max().date()}**")
-                            st.write(f"- Auswertbare Beobachtungen im Saisonfenster: **{n:,}**")
-                            st.write(f"- Positive Kalenderjahre: **{int(yearly['win'].sum()) if year_n else 0}/{year_n}**")
-                            st.warning("Die Konfidenzgrenzen beruhen auf einer einfachen binomialen Näherung. Da Tagesstarts und Forward-Horizonte überlappen, sind die Ergebnisse nicht unabhängig und die Unsicherheit kann größer sein als das Intervall suggeriert.")
-            except Exception as e:
-                st.error(f"Seasonality-Berechnung fehlgeschlagen: {e}")
+                    st.markdown("#### Historische Ergebnisse je Jahr")
+                    yearly_out = yearly.rename(columns={"mean":"Ø Rendite", "median":"Medianrendite", "count":"Beobachtungen", "win_rate":"Gewinnrate"}).reset_index().rename(columns={"year":"Jahr"})
+                    st.dataframe(yearly_out.style.format({"Ø Rendite":"{:.2%}", "Medianrendite":"{:.2%}", "Gewinnrate":"{:.1%}"}), use_container_width=True, hide_index=True)
+                    detail = sample[["close", "net_return", "win"]].reset_index(names="Startdatum")
+                    detail["Ergebnis"] = np.where(detail["win"], "Gewinn", "Verlust")
+                    with st.expander("Einzelbeobachtungen und CSV-Export"):
+                        st.dataframe(detail.sort_values("Startdatum", ascending=False).head(500).style.format({"close":"{:.5f}", "net_return":"{:.2%}"}), use_container_width=True, hide_index=True)
+                        st.download_button("Backtest-Zeilen als CSV herunterladen", data=detail.to_csv(index=False).encode("utf-8"), file_name="seasonality_backtest.csv", mime="text/csv")
+                    st.warning("Die Kennzahlen beschreiben historische Forward-Renditen ab jedem Datum innerhalb des gewählten Kalenderfensters. Die Beobachtungen überlappen sich bei Haltedauern > 1 Tag und sind daher keine unabhängigen Trades. Annualisierung und kumulierte Darstellung sind Näherungen, keine Garantie für zukünftige Ergebnisse.")
+        except Exception as e:
+            st.error(f"Seasonality-Berechnung fehlgeschlagen: {e}")
     else:
-        st.info("Wähle Instrument, Historie, Haltedauer und Kostenannahme und lade dann die echten historischen Kursdaten. Statistiken werden erst nach erfolgreichem Datenabruf berechnet; fehlende Kursdaten werden nicht durch Beispielwerte ersetzt.")
-
+        st.info("Wähle Instrument, Historie, Haltedauer und Kosten und klicke auf „Historische Daten laden / aktualisieren“. Danach kannst du das Saisonfenster interaktiv über die Datumsfelder verändern; alle Kennzahlen und Detailcharts werden automatisch neu berechnet.")
 elif page == "COT / Positioning":
     st.subheader("COT / Positioning")
     st.caption("CFTC-Daten sind Futures-Positionierung, nicht der gesamte globale Spot-FX-Markt. Contract code mapping muss je Datensatz geprüft werden.")
