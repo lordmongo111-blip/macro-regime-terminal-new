@@ -1376,6 +1376,59 @@ elif page == "Saisonalität":
                                         hist_fig.add_vline(x=0, line_dash="dash", line_color="#e05260")
                                         hist_fig.update_layout(height=330, margin=dict(l=10, r=10, t=45, b=10), xaxis_tickformat=".1%")
                                         st.plotly_chart(hist_fig, use_container_width=True)
+                                    st.markdown("#### Beste saisonale Zeitfenster — historische Rangliste")
+                                    st.caption("Scan über Kalender-Starttage und mehrere Haltedauern. Die Rangliste basiert auf historischen Forward-Renditen nach Kosten; kleine Stichproben und überlappende Zeitfenster können die Ergebnisse verzerren.")
+                                    scan_horizons = [5, 10, 20, 30, 60]
+                                    scan_rows = []
+                                    scan_close = close.dropna().sort_index()
+                                    scan_dates = pd.DataFrame({"date": scan_close.index, "close": scan_close.values})
+                                    scan_dates["month_day"] = scan_dates["date"].dt.strftime("%m-%d")
+                                    for scan_h in scan_horizons:
+                                        forward = scan_dates["close"].shift(-scan_h) / scan_dates["close"] - 1.0 - float(cost_bps) / 10000.0
+                                        scan_frame = scan_dates[["date", "month_day"]].copy()
+                                        scan_frame["forward_net"] = forward
+                                        scan_frame = scan_frame.dropna(subset=["forward_net"])
+                                        grouped = scan_frame.groupby("month_day")["forward_net"].agg(["mean", "median", "count", lambda x: float((x > 0).mean())])
+                                        grouped.columns = ["avg_return", "median_return", "n", "win_rate"]
+                                        # Avoid ranking tiny samples; require at least 5 yearly observations where available.
+                                        grouped = grouped[grouped["n"] >= min(5, max(2, int(scan_frame["date"].dt.year.nunique() * 0.5)))]
+                                        if grouped.empty:
+                                            grouped = scan_frame.groupby("month_day")["forward_net"].agg(avg_return="mean", median_return="median", n="count", win_rate=lambda x: float((x > 0).mean()))
+                                        for month_day, row in grouped.sort_values("avg_return", ascending=False).head(10).iterrows():
+                                            scan_rows.append({"Haltedauer (Handelstage)": scan_h, "Startfenster": pd.to_datetime("2000-" + month_day).strftime("%d. %b"), "Ø Rendite": row["avg_return"], "Medianrendite": row["median_return"], "Gewinnrate": row["win_rate"], "Beobachtungen": int(row["n"])})
+                                    scan_result = pd.DataFrame(scan_rows)
+                                    if not scan_result.empty:
+                                        scan_display = scan_result.copy()
+                                        scan_display["Ø Rendite"] = scan_display["Ø Rendite"].map(lambda x: f"{x:.2%}")
+                                        scan_display["Medianrendite"] = scan_display["Medianrendite"].map(lambda x: f"{x:.2%}")
+                                        scan_display["Gewinnrate"] = scan_display["Gewinnrate"].map(lambda x: f"{x:.1%}")
+                                        st.dataframe(scan_display, use_container_width=True, hide_index=True)
+                                        st.download_button("Saisonaler Scanner als CSV herunterladen", data=scan_result.to_csv(index=False).encode("utf-8"), file_name="seasonality_best_windows.csv", mime="text/csv", key="download_seasonality_scan")
+                                    st.markdown("#### Renditevergleich nach Haltedauer")
+                                    comparison_rows = []
+                                    for compare_h in scan_horizons:
+                                        compare_forward = scan_close.shift(-compare_h) / scan_close - 1.0 - float(cost_bps) / 10000.0
+                                        compare_frame = pd.DataFrame({"date": scan_close.index, "forward_net": compare_forward.values}).dropna()
+                                        compare_frame["month_day"] = compare_frame["date"].dt.strftime("%m-%d")
+                                        if start_key <= end_key:
+                                            chosen = (compare_frame["month_day"] >= start_key) & (compare_frame["month_day"] <= end_key)
+                                        else:
+                                            chosen = (compare_frame["month_day"] >= start_key) | (compare_frame["month_day"] <= end_key)
+                                        vals = compare_frame.loc[chosen, "forward_net"]
+                                        if len(vals):
+                                            comparison_rows.append({"Haltedauer (Handelstage)": compare_h, "Ø Rendite": float(vals.mean()), "Medianrendite": float(vals.median()), "Gewinnrate": float((vals > 0).mean()), "Beobachtungen": int(len(vals))})
+                                    if comparison_rows:
+                                        comparison = pd.DataFrame(comparison_rows)
+                                        comp_fig = go.Figure()
+                                        comp_fig.add_trace(go.Bar(x=comparison["Haltedauer (Handelstage)"].astype(str), y=comparison["Ø Rendite"], name="Ø Rendite", marker_color="#4bb5cc"))
+                                        comp_fig.add_trace(go.Scatter(x=comparison["Haltedauer (Handelstage)"].astype(str), y=comparison["Gewinnrate"], name="Gewinnrate", yaxis="y2", mode="lines+markers", line=dict(color="#f0b45a", width=2.5)))
+                                        comp_fig.update_layout(title="Ausgewähltes Saisonfenster — Rendite und Gewinnrate nach Haltedauer", xaxis_title="Haltedauer (Handelstage)", yaxis=dict(title="Ø Netto-Rendite", tickformat=".1%"), yaxis2=dict(title="Gewinnrate", overlaying="y", side="right", tickformat=".0%", range=[0, 1]), height=350, margin=dict(l=10, r=10, t=45, b=10), legend=dict(orientation="h", y=1.12))
+                                        st.plotly_chart(comp_fig, use_container_width=True)
+                                        comparison_display = comparison.copy()
+                                        comparison_display["Ø Rendite"] = comparison_display["Ø Rendite"].map(lambda x: f"{x:.2%}")
+                                        comparison_display["Medianrendite"] = comparison_display["Medianrendite"].map(lambda x: f"{x:.2%}")
+                                        comparison_display["Gewinnrate"] = comparison_display["Gewinnrate"].map(lambda x: f"{x:.1%}")
+                                        st.dataframe(comparison_display, use_container_width=True, hide_index=True)
                                     st.markdown("#### Historische Einzelergebnisse")
                                     st.dataframe(result.sort_values("Jahr", ascending=False).style.format({"Netto-Rendite":"{:.2%}", "Kursindex Start":"{:.2f}", "Kursindex Ende":"{:.2f}"}), use_container_width=True, hide_index=True)
                                     st.download_button("Saison-Ergebnisse als CSV herunterladen", data=result.to_csv(index=False).encode("utf-8"), file_name="seasonality_results.csv", mime="text/csv")
