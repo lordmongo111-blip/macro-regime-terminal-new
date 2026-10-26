@@ -174,6 +174,9 @@ CFTC_CONTRACT_CODES = {
     "6C": "090741",  # Canadian Dollar
     "6S": "092741",  # Swiss Franc
     "6N": "112741",  # New Zealand Dollar
+    "IDX_SP500": "13874A",  # E-mini S&P 500 (US500)
+    "IDX_NASDAQ100": "209742",  # Nasdaq-100 Stock Index (NAS100)
+    "IDX_DOW30": "124603",  # Dow Jones Industrial Average (US30)
 }
 
 def load_cot_history(contract_code, limit=52):
@@ -1889,64 +1892,105 @@ elif page == "Index Macro & Seasonality":
                 season_display = season_display.rename(columns={"avg_return": "Ø Rendite %", "median_return": "Median %", "win_rate": "Positive Monate %", "observations": "Anzahl Monate"})
                 st.dataframe(season_display, use_container_width=True)
 
-                # Transparent index bias: technical trend is the confirmation gate;
-                # seasonality is a secondary directional input. No macro/COT score is
-                # invented because this page does not load validated index-specific data for them.
-                st.markdown("#### Index-Bias: Warum bullish, bearish oder neutral?")
+                # Combined index research score: technical, COT, macro, seasonality and trend confirmation.
+                # Missing or stale components are not silently replaced with zero; final bias fails closed.
+                st.markdown("#### Kombinierter Index-Bias: Technik + COT + Makro + Saisonalität")
+                st.caption("Gewichte: Technik/ML-Proxy 30 %, COT 25 %, Makro 25 %, Saisonalität 10 %, Trend-Bestätigung 10 %. Das ist ein transparentes Research-Modell, kein backtest-validiertes Handelssignal.")
                 current_month = datetime.now().month
                 current_month_name = MONTHS[current_month - 1]
                 current_season = seasonal.iloc[current_month - 1]
                 season_mean = float(current_season["avg_return"]) if pd.notna(current_season["avg_return"]) else np.nan
                 season_obs = int(current_season["observations"]) if pd.notna(current_season["observations"]) else 0
 
+                # Technical score uses normalized trend/momentum evidence; no ML probability is
+                # added because the current ML Lab has not demonstrated an out-of-sample edge.
                 if np.isfinite([last, ret20, ret60, sma50, sma200]).all():
-                    if last > sma50 > sma200 and ret20 > 0 and ret60 > 0:
-                        index_tech_score = 100
-                        index_tech_label = "Bullish bestätigt: Kurs > SMA 50 > SMA 200; 20T- und 60T-Momentum positiv"
-                    elif last < sma50 < sma200 and ret20 < 0 and ret60 < 0:
-                        index_tech_score = -100
-                        index_tech_label = "Bearish bestätigt: Kurs < SMA 50 < SMA 200; 20T- und 60T-Momentum negativ"
-                    else:
-                        index_tech_score = 0
-                        index_tech_label = "Gemischt: Trend- und Momentum-Bedingungen bestätigen keine gemeinsame Richtung"
+                    tech_raw = (35 if last > sma50 else -35) + (35 if last > sma200 else -35)
+                    tech_raw += int(round(np.clip(ret20 / 0.05 * 15, -15, 15)))
+                    tech_raw += int(round(np.clip(ret60 / 0.10 * 15, -15, 15)))
+                    index_tech_score = int(np.clip(tech_raw, -100, 100))
+                    index_tech_label = f"Kurs vs. SMA50/SMA200 und Momentum: 20T {ret20:+.2%}, 60T {ret60:+.2%}"
+                    tech_valid = len(close) >= 200
                 else:
-                    index_tech_score = 0
-                    index_tech_label = "Technische Daten unvollständig"
+                    index_tech_score, index_tech_label, tech_valid = 0, "Technische Daten unvollständig", False
 
+                # Calendar-month seasonality
                 if np.isfinite(season_mean) and season_obs >= 5:
-                    index_season_score = int(round(float(np.clip(season_mean / 0.02 * 100, -100, 100))) )
-                    index_season_label = f"{current_month_name}: historische Ø Monatsrendite {season_mean:+.2%} aus {season_obs} Beobachtungen"
+                    index_season_score = int(round(np.clip(season_mean / 0.02 * 100, -100, 100)))
+                    index_season_label = f"{current_month_name}: Ø Monatsrendite {season_mean:+.2%} aus {season_obs} Jahren"
                     season_valid_for_bias = True
                 else:
-                    index_season_score = 0
-                    index_season_label = f"{current_month_name}: zu wenige valide Monatsbeobachtungen (mindestens 5 erforderlich)"
-                    season_valid_for_bias = False
+                    index_season_score, index_season_label, season_valid_for_bias = 0, f"{current_month_name}: mindestens 5 Jahresbeobachtungen erforderlich", False
 
-                index_composite = int(round(0.70 * index_tech_score + 0.30 * index_season_score))
-                if season_valid_for_bias and index_tech_score == 100 and index_composite >= 20:
+                # COT: only indices with an explicit CFTC futures mapping are scored.
+                cot_map = {"NAS100": "IDX_NASDAQ100", "US500": "IDX_SP500", "US30": "IDX_DOW30"}
+                cot_valid, index_cot_score = False, 0
+                index_cot_label = "Kein verifiziertes Index-COT-Mapping für diesen Markt"
+                if selected_index in cot_map:
+                    try:
+                        cot_hist = load_cot_history(cot_map[selected_index], limit=52)
+                        index_cot_score, cot_latest_net, cot_percentile = cot_positioning_score(cot_hist)
+                        cot_valid = True
+                        index_cot_label = f"CFTC Non-commercial Net {cot_latest_net:,.0f}; historisches Perzentil {cot_percentile:.0%}; Bericht {cot_hist['date'].iloc[-1].date()}"
+                    except Exception as cot_exc:
+                        index_cot_label = f"COT nicht valide/verfügbar: {cot_exc}"
+
+                # Macro proxy: US 10Y Treasury yield change over ~3 months, inverted because
+                # falling yields generally ease valuation pressure. This is not a full macro model.
+                macro_valid, index_macro_score = False, 0
+                index_macro_label = "Quantitativer Makro-Score fehlt; FRED_API_KEY erforderlich (nur US-Indizes unterstützt)"
+                if selected_index in {"NAS100", "US500", "US30"} and fred_key:
+                    try:
+                        yields = get_fred_series("DGS10", fred_key, observation_start="2024-01-01")
+                        yields = yields.sort_values("date").dropna(subset=["value"])
+                        if len(yields) >= 65:
+                            latest_yield = float(yields.iloc[-1]["value"])
+                            prior_yield = float(yields.iloc[-min(65, len(yields))]["value"])
+                            change_pp = latest_yield - prior_yield
+                            index_macro_score = int(round(np.clip(-change_pp / 1.0 * 100, -100, 100)))
+                            macro_valid = (pd.Timestamp.now() - pd.Timestamp(yields.iloc[-1]["date"]).tz_localize(None)).days <= 10
+                            index_macro_label = f"US 10Y Treasury: {prior_yield:.2f}% → {latest_yield:.2f}% (ca. 3 Monate; Δ {change_pp:+.2f} Prozentpunkte)" + ("" if macro_valid else " — Daten zu alt")
+                    except Exception as macro_exc:
+                        index_macro_label = f"FRED-Makrodaten nicht verfügbar: {macro_exc}"
+
+                # Confirmation proxy from price trend. This is explicitly NOT constituent market breadth.
+                confirm_valid = bool(np.isfinite([last, sma50, sma200]).all() and len(close) >= 200)
+                if confirm_valid:
+                    index_confirm_score = int(np.clip((35 if last > sma50 else -35) + (65 if sma200 < last else -65), -100, 100))
+                    index_confirm_label = f"Preis über/unter SMA50 und SMA200; kein echter Constituents-Breadth-Feed"
+                else:
+                    index_confirm_score, index_confirm_label = 0, "Trendbestätigung nicht verfügbar"
+
+                weights = {"Technik / Momentum (30 %)": (index_tech_score, 0.30, tech_valid, index_tech_label),
+                           "COT Positionierung (25 %)": (index_cot_score, 0.25, cot_valid, index_cot_label),
+                           "Makro: US 10Y Proxy (25 %)": (index_macro_score, 0.25, macro_valid, index_macro_label),
+                           "Saisonalität (10 %)": (index_season_score, 0.10, season_valid_for_bias, index_season_label),
+                           "Trend-Bestätigung (10 %)": (index_confirm_score, 0.10, confirm_valid, index_confirm_label)}
+                index_composite = int(round(sum(score * weight for score, weight, valid, label in weights.values())))
+                all_components_valid = all(valid for score, weight, valid, label in weights.values())
+                if all_components_valid and index_composite >= 25:
                     index_bias = "LONG / BULLISH"
-                elif season_valid_for_bias and index_tech_score == -100 and index_composite <= -20:
+                elif all_components_valid and index_composite <= -25:
                     index_bias = "SHORT / BEARISH"
                 else:
                     index_bias = "NEUTRAL"
 
                 b1, b2, b3 = st.columns(3)
-                b1.metric("Index-Bias (Regelmodell)", index_bias)
+                b1.metric("Kombinierter Index-Bias", index_bias)
                 b2.metric("Gewichteter Score", f"{index_composite:+d} / 100")
-                b3.metric("Technische Bestätigung", "Bullish" if index_tech_score == 100 else "Bearish" if index_tech_score == -100 else "Gemischt")
-                st.caption("Transparente Regelversion: Technik 70 %, aktuelle Kalender-Monats-Saisonalität 30 %. LONG/SHORT wird nur ausgegeben, wenn Technik die Richtung vollständig bestätigt und der Score mindestens +20 bzw. höchstens −20 erreicht. Dies ist ein zusätzlicher Research-Proxy, kein Backtest-validiertes Handelssignal.")
-                bias_detail = pd.DataFrame([
-                    {"Faktor": "Technik (70 %)", "Rohwert": index_tech_score, "Gewichteter Beitrag": round(0.70 * index_tech_score, 1), "Erklärung": index_tech_label},
-                    {"Faktor": f"Saisonalität (30 %)", "Rohwert": index_season_score, "Gewichteter Beitrag": round(0.30 * index_season_score, 1), "Erklärung": index_season_label},
-                ])
+                b3.metric("Validierte Komponenten", f"{sum(1 for x in weights.values() if x[2])} / {len(weights)}")
+                bias_detail = pd.DataFrame([{"Faktor": name, "Score": score, "Gewicht": f"{weight:.0%}", "Beitrag": round(score * weight, 1), "Status": "OK" if valid else "FEHLT / NICHT VALIDE", "Erklärung": label} for name, (score, weight, valid, label) in weights.items()])
                 st.dataframe(bias_detail, use_container_width=True, hide_index=True)
-                if index_bias == "LONG / BULLISH":
-                    st.success(f"Warum LONG? Der technische Trend ist aufwärtsgerichtet und bestätigt die Richtung. Die historische Saisonalität für {current_month_name} ergibt einen Gesamt-Score von {index_composite:+d}/100.")
+                if not all_components_valid:
+                    missing_names = [name for name, (score, weight, valid, label) in weights.items() if not valid]
+                    st.warning("Finaler Bias bleibt NEUTRAL, weil Pflichtkomponenten fehlen oder nicht valide sind: " + "; ".join(missing_names) + ". Es werden keine fehlenden Werte als neutrale Scores ausgegeben.")
+                elif index_bias == "LONG / BULLISH":
+                    st.success(f"Research-Bias LONG: kombinierter Score {index_composite:+d}/100. Bitte vor einer Handelsentscheidung Backtest, Risiko und Ausführungsdaten prüfen.")
                 elif index_bias == "SHORT / BEARISH":
-                    st.error(f"Warum SHORT? Der technische Trend ist abwärtsgerichtet und bestätigt die Richtung. Die historische Saisonalität für {current_month_name} ergibt einen Gesamt-Score von {index_composite:+d}/100.")
+                    st.error(f"Research-Bias SHORT: kombinierter Score {index_composite:+d}/100. Bitte vor einer Handelsentscheidung Backtest, Risiko und Ausführungsdaten prüfen.")
                 else:
-                    st.info(f"Warum NEUTRAL? LONG/SHORT wird nicht freigegeben, wenn Technik und Saisonalität keine ausreichende, bestätigte Richtung ergeben oder zu wenige Saisonbeobachtungen vorliegen. Aktueller Regel-Score: {index_composite:+d}/100.")
-                st.warning("Wichtige Abgrenzung: Anders als FX Signal enthält diese Index-Bias-Regel aktuell keinen quantitativen Makro- oder COT-Beitrag. Die oben genannten Fundamental-Treiber sind Research-Kontext und fließen nicht in diesen Score ein. Für eine gleichwertige Makro-/COT-Engine müssten passende, frische und korrekt zugeordnete Daten integriert werden.")
+                    st.info(f"Research-Bias NEUTRAL: kombinierter Score {index_composite:+d}/100 liegt nicht über der Schwelle ±25.")
+                st.caption("Wichtig: COT ist derzeit nur für NAS100, US500 und US30 gemappt. Der quantitative Makro-Proxy ist vorerst nur für diese US-Indizes verfügbar und benötigt einen FRED-Key. Die 10%-Bestätigung ist ein Kurs-Trend-Proxy, keine echte Marktbreite. Das aktuelle ML-Modell wird nicht gewichtet, weil die vorhandene Out-of-sample-Auswertung keinen überzeugenden Vorteil gegenüber der Baseline zeigt.")
 
                 # Calendar-year performance and drawdown, derived only from loaded historical prices.
                 annual = close.resample("YE").last().pct_change().dropna() * 100
