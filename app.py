@@ -543,7 +543,11 @@ if page == "Übersicht":
         dashboard_symbols = {"EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "JPY=X",
                              "AUD/USD": "AUDUSD=X", "USD/CAD": "CAD=X", "USD/CHF": "CHF=X",
                              "NZD/USD": "NZDUSD=X", "Nasdaq-100 Future": "NQ=F",
-                             "S&P 500 Future": "ES=F", "VIX": "^VIX"}
+                             "S&P 500 Future": "ES=F", "VIX": "^VIX",
+                             "NAS100 (Nasdaq-100 Cash)": "^NDX", "US500 (S&P 500 Cash)": "^GSPC",
+                             "US30 (Dow Jones Cash)": "^DJI", "GER30 (DAX Cash)": "^GDAXI",
+                             "EUSTX50 (Euro Stoxx 50)": "^STOXX50E", "UK100 (FTSE 100)": "^FTSE",
+                             "JPN225 (Nikkei 225)": "^N225", "HK50 (Hang Seng)": "^HSI"}
         with st.spinner("Lade Markt- und Makrodaten…"):
             for label, symbol in dashboard_symbols.items():
                 try:
@@ -1729,11 +1733,15 @@ elif page == "NQ & ES":
 
 elif page == "Quant & Regression":
     st.subheader("Quant & Regression")
-    st.caption("OLS auf historischen Kursrenditen aus der vorhandenen Yahoo Finance/yfinance-Datenquelle. Keine synthetischen Demo-Werte.")
-    fx_pairs = {
+    st.caption("OLS auf historischen Kursrenditen: FX-Paare und Indizes (Cash-Proxies). Keine synthetischen Demo-Werte.")
+    quant_assets = {
         "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "JPY=X",
         "AUD/USD": "AUDUSD=X", "USD/CAD": "CAD=X", "USD/CHF": "CHF=X",
         "NZD/USD": "NZDUSD=X", "EUR/GBP": "EURGBP=X", "EUR/JPY": "EURJPY=X",
+        "NAS100 — Nasdaq-100": "^NDX", "US500 — S&P 500": "^GSPC",
+        "US30 — Dow Jones": "^DJI", "GER30 — DAX": "^GDAXI",
+        "EUSTX50 — EURO STOXX 50": "^STOXX50E", "UK100 — FTSE 100": "^FTSE",
+        "JPN225 — Nikkei 225": "^N225", "HK50 — Hang Seng": "^HSI",
     }
     benchmarks = {
         "US-Dollar-Index (DXY)": "DX-Y.NYB", "S&P 500": "^GSPC",
@@ -1744,14 +1752,14 @@ elif page == "Quant & Regression":
     }
     with st.form("quant_regression_form"):
         c1, c2 = st.columns(2)
-        pair_label = c1.selectbox("FX-Paar (abhängige Variable)", list(fx_pairs), index=0)
+        pair_label = c1.selectbox("Asset (abhängige Variable)", list(quant_assets), index=0)
         bench_label = c2.selectbox("Benchmark (erklärende Variable)", list(benchmarks), index=0)
         c3, c4 = st.columns(2)
         period_label = c3.selectbox("Historischer Zeitraum", ["1 Jahr", "2 Jahre", "5 Jahre", "10 Jahre"], index=1)
         freq_label = c4.selectbox("Renditefrequenz", ["Täglich", "Wöchentlich"], index=0)
         submitted = st.form_submit_button("Historische Regression berechnen", type="primary")
     if submitted:
-        pair_symbol, bench_symbol = fx_pairs[pair_label], benchmarks[bench_label]
+        pair_symbol, bench_symbol = quant_assets[pair_label], benchmarks[bench_label]
         period_map = {"1 Jahr": "1y", "2 Jahre": "2y", "5 Jahre": "5y", "10 Jahre": "10y"}
         period = period_map[period_label]
         try:
@@ -1806,8 +1814,46 @@ elif page == "Quant & Regression":
         except Exception as e:
             st.error(f"Historische Regression fehlgeschlagen: {e}")
             st.caption("Es werden keine synthetischen Werte als Ersatz angezeigt. Prüfe die Datenverbindung, Symbolverfügbarkeit und installierte yfinance-Version.")
-    st.markdown("#### Risk regime inputs")
-    st.write("Noch nicht bewertet: Aktienbreite, Realrenditen, Kreditspreads, Dollartrend und Volatilität. Keine Risk-on/off-Klassifikation ohne verifizierte Inputs.")
+    st.markdown("#### Index-Regime-Check")
+    st.caption("Schneller technischer Regime-Proxy für Indizes; kein validiertes Fundamental- oder Handelssignal.")
+    regime_assets = {
+        "NAS100 — Nasdaq-100": "^NDX", "US500 — S&P 500": "^GSPC", "US30 — Dow Jones": "^DJI",
+        "GER30 — DAX": "^GDAXI", "EUSTX50 — EURO STOXX 50": "^STOXX50E", "UK100 — FTSE 100": "^FTSE",
+        "JPN225 — Nikkei 225": "^N225", "HK50 — Hang Seng": "^HSI"
+    }
+    with st.form("quant_index_regime_form"):
+        regime_asset_label = st.selectbox("Index für Regime-Check", list(regime_assets))
+        regime_period_label = st.selectbox("Regime-Zeitraum", ["1 Jahr", "2 Jahre", "5 Jahre"], index=1)
+        regime_submit = st.form_submit_button("Index-Regime berechnen")
+    if regime_submit:
+        try:
+            _period = {"1 Jahr": "1y", "2 Jahre": "2y", "5 Jahre": "5y"}[regime_period_label]
+            _hist = load_market_history(regime_assets[regime_asset_label], _period)
+            _hist["close"] = pd.to_numeric(_hist["close"], errors="coerce")
+            _hist = _hist.dropna(subset=["close"]).sort_values("date")
+            if len(_hist) < 200:
+                raise ValueError("Mindestens 200 gültige Handelstage werden für SMA200 benötigt.")
+            _close = _hist["close"]
+            _sma50 = float(_close.rolling(50).mean().iloc[-1])
+            _sma200 = float(_close.rolling(200).mean().iloc[-1])
+            _ret20 = float(_close.pct_change(20).iloc[-1] * 100)
+            _ret60 = float(_close.pct_change(60).iloc[-1] * 100)
+            if _close.iloc[-1] > _sma50 > _sma200 and _ret20 > 0:
+                _regime, _why = "BULLISH TREND (PROXY)", "Kurs über SMA50, SMA50 über SMA200 und 20-Tage-Momentum positiv."
+            elif _close.iloc[-1] < _sma50 < _sma200 and _ret20 < 0:
+                _regime, _why = "BEARISH TREND (PROXY)", "Kurs unter SMA50, SMA50 unter SMA200 und 20-Tage-Momentum negativ."
+            else:
+                _regime, _why = "NEUTRAL / GEMISCHT", "Trend- und Momentum-Bedingungen bestätigen sich nicht vollständig."
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric("Regime", _regime)
+            r2.metric("20T Rendite", f"{_ret20:+.2f}%")
+            r3.metric("60T Rendite", f"{_ret60:+.2f}%")
+            r4.metric("Kurs vs. SMA200", f"{(_close.iloc[-1] / _sma200 - 1) * 100:+.2f}%")
+            st.write(_why)
+            st.caption(f"Quelle: Yahoo Finance Proxy {regime_assets[regime_asset_label]} · letzte verfügbare Historie · kein Echtzeitfeed.")
+        except Exception as _exc:
+            st.error(f"Index-Regime konnte nicht berechnet werden: {_exc}")
+    st.write("Fundamentale Aktienbreite, Kreditspreads und Realrenditen sind hier nicht vollständig integriert; dieser Regime-Check bleibt ein technischer Proxy.")
 
 
 elif page in ("Index Macro & Seasonality", "Index Signal"):
