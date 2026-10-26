@@ -2029,7 +2029,23 @@ elif page in ("Index Macro & Seasonality", "Index Signal"):
                 b1, b2, b3 = st.columns(3)
                 b1.metric("Kombinierter Index-Bias", index_bias)
                 b2.metric("Gewichteter Score", f"{index_composite:+d} / 100")
-                b3.metric("Validierte Komponenten", f"{sum(1 for x in weights.values() if x[2])} / {len(weights)}")
+                b3.metric("Komponenten mit gültigen Daten", f"{sum(1 for x in weights.values() if x[2])} / {len(weights)}")
+
+                # Separate horizon readout: do not let a positive long-term trend hide short-term weakness.
+                if np.isfinite([ret20, ret60]).all():
+                    short_term = "BEARISH" if ret20 <= -0.02 else ("BULLISH" if ret20 >= 0.02 else "NEUTRAL / GEMISCHT")
+                    medium_term = "BEARISH" if ret60 <= -0.03 else ("BULLISH" if ret60 >= 0.03 else "NEUTRAL / GEMISCHT")
+                    st.markdown("#### Zeithorizonte getrennt betrachten")
+                    h1, h2 = st.columns(2)
+                    h1.metric("Kurzfristig · 20 Handelstage", short_term, f"{ret20:+.2%}")
+                    h2.metric("Mittelfristig · 60 Handelstage", medium_term, f"{ret60:+.2%}")
+                    if short_term != medium_term:
+                        st.warning("Die Zeithorizonte widersprechen sich. Das Gesamtsignal darf nicht als kurzfristige Prognose missverstanden werden.")
+
+                # Confidence describes score strength only, not a calibrated probability of success.
+                score_strength = abs(index_composite)
+                strength_label = "starker Score-Ausschlag" if score_strength >= 50 else ("moderater Score-Ausschlag" if score_strength >= 25 else "schwacher / neutraler Score")
+                st.caption(f"Score-Stärke: {strength_label}. Der Score ist keine Erfolgswahrscheinlichkeit und wurde nicht als profitables Handelssystem validiert.")
                 bias_detail = pd.DataFrame([{"Faktor": name, "Score": score, "Gewicht": f"{weight:.0%}", "Beitrag": round(score * weight, 1), "Status": "OK" if valid else "FEHLT / NICHT VALIDE", "Erklärung": label} for name, (score, weight, valid, label) in weights.items()])
                 st.markdown("#### Warum kommt dieser Bias zustande?")
                 st.caption("Der Score jedes Faktors reicht von −100 (bearish) bis +100 (bullish). Der Beitrag ist Score × Gewicht. Die Beiträge werden addiert; fehlende Komponenten werden nicht als 0 gewertet und sperren den finalen Bias.")
@@ -2043,7 +2059,15 @@ elif page in ("Index Macro & Seasonality", "Index Signal"):
                     st.error(f"Research-Bias SHORT: kombinierter Score {index_composite:+d}/100. Bitte vor einer Handelsentscheidung Backtest, Risiko und Ausführungsdaten prüfen.")
                 else:
                     st.info(f"Research-Bias NEUTRAL: kombinierter Score {index_composite:+d}/100 liegt nicht über der Schwelle ±25.")
-                st.caption("Wichtig: COT ist derzeit nur für NAS100, US500 und US30 gemappt. Der quantitative Makro-Proxy ist vorerst nur für diese US-Indizes verfügbar und benötigt einen FRED-Key. Die 10%-Bestätigung ist ein Kurs-Trend-Proxy, keine echte Marktbreite. Das aktuelle ML-Modell wird nicht gewichtet, weil die vorhandene Out-of-sample-Auswertung keinen überzeugenden Vorteil gegenüber der Baseline zeigt.")
+                st.caption("Daten-/Modellgrenzen: COT ist derzeit nur für NAS100, US500 und US30 gemappt. Der quantitative Makro-Proxy ist vorerst nur für diese US-Indizes verfügbar und benötigt einen FRED-Key. Die 10%-Bestätigung ist ein Kurs-Trend-Proxy, keine echte Marktbreite. Das ML-Modell wird nicht gewichtet, weil die bisherige Out-of-sample-Auswertung keinen überzeugenden Vorteil gegenüber der Baseline zeigt. Dieses Research-Signal ist nicht für automatische Orders gedacht.")
+                with st.expander("Wie vor einem Trade prüfen?"):
+                    st.markdown("""
+                    1. **Daten prüfen:** Proxy, letztes Kursdatum, COT-Berichtsdatum und FRED-Aktualität kontrollieren.
+                    2. **Widersprüche lesen:** Kurzfristigen und mittelfristigen Horizont getrennt bewerten; COT kann verzögert sein.
+                    3. **Makroereignisse prüfen:** Fed, Inflation, Arbeitsmarkt und große Nasdaq-Unternehmensberichte im Kalender kontrollieren.
+                    4. **Validierung prüfen:** Vor echtem Einsatz Walk-forward-Backtest inklusive Gebühren, Slippage und Drawdown durchführen.
+                    5. **Kein Signal erzwingen:** Fehlende Pflichtdaten oder nicht getestete Logik bedeuten Research/Beobachtung, nicht automatisch Long oder Short.
+                    """)
 
                 # Calendar-year performance and drawdown, derived only from loaded historical prices.
                 annual = close.resample("YE").last().pct_change().dropna() * 100
