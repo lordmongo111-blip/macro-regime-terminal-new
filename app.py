@@ -1986,21 +1986,97 @@ elif page in ("Index Macro & Seasonality", "Index Signal"):
                     except Exception as cot_exc:
                         index_cot_label = f"COT nicht valide/verfügbar: {cot_exc}"
 
-                # Macro proxy: US 10Y Treasury yield change over ~3 months, inverted because
-                # falling yields generally ease valuation pressure. This is not a full macro model.
+                # Multi-factor US macro regime (FRED). Series are scored only after freshness checks.
+                # This is a transparent heuristic, not a causal model or a trade-validated signal.
                 macro_valid, index_macro_score = False, 0
-                index_macro_label = "Quantitativer Makro-Score fehlt; FRED_API_KEY erforderlich (nur US-Indizes unterstützt)"
+                macro_components = []
+                index_macro_label = "Makro-Score benötigt FRED_API_KEY; unterstützt: NAS100, US500, US30"
                 if selected_index in {"NAS100", "US500", "US30"} and fred_key:
                     try:
-                        yields = get_fred_series("DGS10", fred_key, observation_start="2024-01-01")
-                        yields = yields.sort_values("date").dropna(subset=["value"])
-                        if len(yields) >= 65:
-                            latest_yield = float(yields.iloc[-1]["value"])
-                            prior_yield = float(yields.iloc[-min(65, len(yields))]["value"])
-                            change_pp = latest_yield - prior_yield
-                            index_macro_score = int(round(np.clip(-change_pp / 1.0 * 100, -100, 100)))
-                            macro_valid = (pd.Timestamp.now() - pd.Timestamp(yields.iloc[-1]["date"]).tz_localize(None)).days <= 10
-                            index_macro_label = f"US 10Y Treasury: {prior_yield:.2f}% → {latest_yield:.2f}% (ca. 3 Monate; Δ {change_pp:+.2f} Prozentpunkte)" + ("" if macro_valid else " — Daten zu alt")
+                        macro_specs = [
+                            ("DGS10", "10Y-Rendite", "daily"),
+                            ("DGS2", "2Y-Rendite", "daily"),
+                            ("FEDFUNDS", "Fed Funds", "monthly"),
+                            ("CPIAUCSL", "CPI", "monthly"),
+                            ("UNRATE", "Arbeitslosenquote", "monthly"),
+                        ]
+                        macro_data = {}
+                        macro_errors = []
+                        for sid, label, freq in macro_specs:
+                            try:
+                                series = get_fred_series(sid, fred_key, observation_start="2018-01-01")
+                                series = series.sort_values("date").dropna(subset=["value"])
+                                if len(series) >= 4:
+                                    macro_data[sid] = series
+                                else:
+                                    macro_errors.append(f"{label}: zu wenige Werte")
+                            except Exception as series_exc:
+                                macro_errors.append(f"{label}: {series_exc}")
+                        raw_scores = []
+                        # Falling long yields can ease equity valuation pressure.
+                        if "DGS10" in macro_data and len(macro_data["DGS10"]) >= 65:
+                            s = macro_data["DGS10"]
+                            latest = float(s.iloc[-1]["value"]); prior = float(s.iloc[-min(65, len(s))]["value"])
+                            delta = latest - prior
+                            raw_scores.append(("10Y-Rendite (3M)", float(np.clip(-delta * 55, -100, 100)),
+                                               f"{prior:.2f}% → {latest:.2f}% ({delta:+.2f} pp)"))
+                        # Curve steepening/positive slope is a modest growth-cycle signal.
+                        if "DGS10" in macro_data and "DGS2" in macro_data:
+                            a, b = macro_data["DGS10"], macro_data["DGS2"]
+                            curve_now = float(a.iloc[-1]["value"] - b.iloc[-1]["value"])
+                            curve_old = float(a.iloc[-min(65, len(a))]["value"] - b.iloc[-min(65, len(b))]["value"])
+                            raw_scores.append(("Zinskurve 10Y–2Y", float(np.clip(curve_now * 30 + (curve_now-curve_old)*20, -100, 100)),
+                                               f"{curve_now:+.2f} pp; 3M-Veränderung {(curve_now-curve_old):+.2f} pp"))
+                        # Inflation momentum: compare latest YoY CPI to YoY CPI three months earlier.
+                        if "CPIAUCSL" in macro_data and len(macro_data["CPIAUCSL"]) >= 16:
+                            s = macro_data["CPIAUCSL"].reset_index(drop=True)
+                            vals = s["value"].astype(float)
+                            yoy_now = (vals.iloc[-1] / vals.iloc[-13] - 1) * 100
+                            yoy_old = (vals.iloc[-4] / vals.iloc[-16] - 1) * 100
+                            d = yoy_now - yoy_old
+                            raw_scores.append(("Inflationstrend", float(np.clip(-d * 35, -100, 100)),
+                                               f"CPI YoY {yoy_old:.1f}% → {yoy_now:.1f}% ({d:+.1f} pp)"))
+                        # A rising unemployment rate is a recession-risk warning, not automatically bearish.
+                        if "UNRATE" in macro_data and len(macro_data["UNRATE"]) >= 4:
+                            s = macro_data["UNRATE"]
+                            latest = float(s.iloc[-1]["value"]); prior = float(s.iloc[-4]["value"])
+                            d = latest-prior
+                            raw_scores.append(("Arbeitsmarkt (UNRATE)", float(np.clip(-d * 35, -100, 100)),
+                                               f"{prior:.1f}% → {latest:.1f}% ({d:+.1f} pp / ca. 3M)"))
+                        # Policy-rate direction gets a lower weight; level alone is not treated as direction.
+                        if "FEDFUNDS" in macro_data and len(macro_data["FEDFUNDS"]) >= 4:
+                            s = macro_data["FEDFUNDS"]
+                            latest = float(s.iloc[-1]["value"]); prior = float(s.iloc[-4]["value"])
+                            d = latest-prior
+                            raw_scores.append(("Fed Funds (Trend)", float(np.clip(-d * 25, -100, 100)),
+                                               f"{prior:.2f}% → {latest:.2f}% ({d:+.2f} pp / ca. 3M)"))
+                        if raw_scores:
+                            macro_weights = {"10Y-Rendite (3M)": .25, "Zinskurve 10Y–2Y": .20,
+                                             "Inflationstrend": .20, "Arbeitsmarkt (UNRATE)": .20,
+                                             "Fed Funds (Trend)": .15}
+                            available_weight = sum(macro_weights.get(name, 0) for name, score, detail in raw_scores)
+                            if available_weight > 0:
+                                index_macro_score = int(round(sum(score * macro_weights.get(name, 0)
+                                    for name, score, detail in raw_scores) / available_weight))
+                            latest_dates = [df["date"].iloc[-1] for df in macro_data.values()]
+                            age_days = max((pd.Timestamp.now().normalize() - pd.Timestamp(d).normalize()).days for d in latest_dates)
+                            # CPI and labor data are monthly; allow 60 days, but label age transparently.
+                            macro_valid = age_days <= 60 and len(raw_scores) >= 3
+                            index_macro_label = f"Multi-Faktor-Makro: {len(raw_scores)}/5 Teilindikatoren; älteste Reihe {age_days} Tage alt"
+                            st.markdown("##### Makro-Dashboard — FRED")
+                            st.caption("Heuristischer Score aus Zinsen, Zinskurve, Inflation, Arbeitsmarkt und Fed-Trend. Veröffentlichungsverzögerungen und Revisionen beachten; kein validiertes Handelssignal.")
+                            mc1, mc2 = st.columns([1, 2])
+                            mc1.metric("Makro-Regime-Score", f"{index_macro_score:+d}/100",
+                                       "bullish" if index_macro_score >= 20 else ("bearish" if index_macro_score <= -20 else "neutral"))
+                            mc2.write(index_macro_label + (" — Daten aktuell genug" if macro_valid else " — DATEN UNVOLLSTÄNDIG/ALT: Score wird im Gesamtsignal nicht gewertet"))
+                            macro_table = pd.DataFrame([{"Faktor": name, "Teilscore": round(score),
+                                                         "Aktueller Kontext": detail}
+                                                        for name, score, detail in raw_scores])
+                            st.dataframe(macro_table, use_container_width=True, hide_index=True)
+                            if macro_errors:
+                                st.caption("Nicht geladene Reihen: " + " | ".join(macro_errors))
+                        else:
+                            index_macro_label = "Keine ausreichenden FRED-Reihen für einen Makro-Score."
                     except Exception as macro_exc:
                         index_macro_label = f"FRED-Makrodaten nicht verfügbar: {macro_exc}"
 
@@ -2014,7 +2090,7 @@ elif page in ("Index Macro & Seasonality", "Index Signal"):
 
                 weights = {"Technik / Momentum (30 %)": (index_tech_score, 0.30, tech_valid, index_tech_label),
                            "COT Positionierung (25 %)": (index_cot_score, 0.25, cot_valid, index_cot_label),
-                           "Makro: US 10Y Proxy (25 %)": (index_macro_score, 0.25, macro_valid, index_macro_label),
+                           "Makro: Multi-Faktor (25 %)": (index_macro_score, 0.25, macro_valid, index_macro_label),
                            "Saisonalität (10 %)": (index_season_score, 0.10, season_valid_for_bias, index_season_label),
                            "Trend-Bestätigung (10 %)": (index_confirm_score, 0.10, confirm_valid, index_confirm_label)}
                 index_composite = int(round(sum(score * weight for score, weight, valid, label in weights.values())))
@@ -2059,7 +2135,7 @@ elif page in ("Index Macro & Seasonality", "Index Signal"):
                     st.error(f"Research-Bias SHORT: kombinierter Score {index_composite:+d}/100. Bitte vor einer Handelsentscheidung Backtest, Risiko und Ausführungsdaten prüfen.")
                 else:
                     st.info(f"Research-Bias NEUTRAL: kombinierter Score {index_composite:+d}/100 liegt nicht über der Schwelle ±25.")
-                st.caption("Daten-/Modellgrenzen: COT ist derzeit nur für NAS100, US500 und US30 gemappt. Der quantitative Makro-Proxy ist vorerst nur für diese US-Indizes verfügbar und benötigt einen FRED-Key. Die 10%-Bestätigung ist ein Kurs-Trend-Proxy, keine echte Marktbreite. Das ML-Modell wird nicht gewichtet, weil die bisherige Out-of-sample-Auswertung keinen überzeugenden Vorteil gegenüber der Baseline zeigt. Dieses Research-Signal ist nicht für automatische Orders gedacht.")
+                st.caption("Daten-/Modellgrenzen: COT ist derzeit nur für NAS100, US500 und US30 gemappt. Der Multi-Faktor-Makro-Score (Zinsen, Zinskurve, Inflation, Arbeitsmarkt, Fed-Trend) ist vorerst nur für diese US-Indizes verfügbar und benötigt einen FRED-Key. Die 10%-Bestätigung ist ein Kurs-Trend-Proxy, keine echte Marktbreite. Das ML-Modell wird nicht gewichtet, weil die bisherige Out-of-sample-Auswertung keinen überzeugenden Vorteil gegenüber der Baseline zeigt. Dieses Research-Signal ist nicht für automatische Orders gedacht.")
                 with st.expander("Wie vor einem Trade prüfen?"):
                     st.markdown("""
                     1. **Daten prüfen:** Proxy, letztes Kursdatum, COT-Berichtsdatum und FRED-Aktualität kontrollieren.
