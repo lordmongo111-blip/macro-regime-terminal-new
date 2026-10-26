@@ -1247,6 +1247,7 @@ elif page == "Index ML Lab":
     years_idx = st.selectbox("Historie", ["5y", "10y", "max"], index=1, key="index_ml_years")
     st.markdown("#### Index-Makro-Kontext")
     st.caption("Diese Kontextreihen helfen bei der Interpretation, werden aber nicht als bestätigte fundamentale ML-Features ausgegeben.")
+    st.info("So erhältst du die Bias-Erklärung: Wähle Index, Prognosehorizont und Historie und klicke danach auf **Index-Modell trainieren & testen**. Nach erfolgreichem Lauf erscheint unter **Aktuelle ML-Einschätzung** die Tabelle **Warum kommt dieser Bias zustande?** mit den wichtigsten Modellfaktoren, ihren aktuellen Werten und einer Erklärung auf Deutsch.")
     if st.button("Index-Modell trainieren & testen", type="primary", key="run_index_ml"):
         try:
             from sklearn.ensemble import RandomForestClassifier
@@ -1322,6 +1323,77 @@ elif page == "Index ML Lab":
                             st.error("Die geschätzte Aufwärtswahrscheinlichkeit liegt mindestens 5 Prozentpunkte unter 50 %. Das ist ein Modell-Bias, keine Trade-Garantie.")
                         else:
                             st.info("Die Modellwahrscheinlichkeit liegt nahe 50 %; kein klarer Richtungs-Bias.")
+                        # Explain the current model context in plain German.
+                        # Random Forest feature_importances_ are global importance, not signed local contributions.
+                        current_values_idx = current_feat_idx.iloc[0]
+                        explanation_rows_idx = []
+                        for factor_idx, importance_val_idx in sorted(
+                            zip(X_idx.columns, model_idx.feature_importances_),
+                            key=lambda item: item[1], reverse=True
+                        )[:10]:
+                            value_idx = float(current_values_idx[factor_idx])
+                            if factor_idx.startswith("return_"):
+                                period_idx = factor_idx.replace("return_", "").replace("d", "")
+                                if value_idx > 0.005:
+                                    tendency_idx = "Eher bullish"
+                                    meaning_idx = f"Rendite über {period_idx} Handelstage positiv ({value_idx:+.1%}); zuletzt Aufwärtsmomentum."
+                                elif value_idx < -0.005:
+                                    tendency_idx = "Eher bearish"
+                                    meaning_idx = f"Rendite über {period_idx} Handelstage negativ ({value_idx:+.1%}); zuletzt Abwärtsdruck."
+                                else:
+                                    tendency_idx = "Neutral"
+                                    meaning_idx = f"Rendite über {period_idx} Handelstage nahe null ({value_idx:+.1%})."
+                            elif factor_idx.startswith("ma_gap_"):
+                                period_idx = factor_idx.replace("ma_gap_", "")
+                                if value_idx > 0.005:
+                                    tendency_idx = "Eher bullish"
+                                    meaning_idx = f"Kurs liegt {value_idx:.1%} über seinem {period_idx}-Tage-Durchschnitt; Trendlage positiv."
+                                elif value_idx < -0.005:
+                                    tendency_idx = "Eher bearish"
+                                    meaning_idx = f"Kurs liegt {abs(value_idx):.1%} unter seinem {period_idx}-Tage-Durchschnitt; Trendlage schwächer."
+                                else:
+                                    tendency_idx = "Neutral"
+                                    meaning_idx = f"Kurs nahe am {period_idx}-Tage-Durchschnitt."
+                            elif factor_idx == "momentum_20_60":
+                                if value_idx > 0.005:
+                                    tendency_idx = "Eher bullish"
+                                    meaning_idx = f"20-Tage-Rendite ist stärker als die 60-Tage-Rendite ({value_idx:+.1%}); kurzfristiges Momentum verbessert sich."
+                                elif value_idx < -0.005:
+                                    tendency_idx = "Eher bearish"
+                                    meaning_idx = f"20-Tage-Rendite ist schwächer als die 60-Tage-Rendite ({value_idx:+.1%}); kurzfristiges Momentum lässt nach."
+                                else:
+                                    tendency_idx = "Neutral"
+                                    meaning_idx = "Kurzfristiges Momentum unterscheidet sich kaum vom 60-Tage-Momentum."
+                            elif factor_idx.startswith("volatility_") or factor_idx == "vol_ratio_5_20":
+                                tendency_idx = "Risiko-Kontext"
+                                meaning_idx = f"Volatilitätsmaß = {value_idx:.4f}; beschreibt Schwankungsintensität, nicht direkt die Richtung."
+                                if factor_idx == "vol_ratio_5_20":
+                                    meaning_idx += " Über 1 bedeutet: 5-Tage-Schwankung höher als 20-Tage-Schwankung."
+                            else:
+                                tendency_idx = "Saisonalität"
+                                meaning_idx = f"Kalender-Feature ({factor_idx}); vom Modell genutzt, aber nicht direkt als bullisch/bearish lesbar (Wert {value_idx:.3f})."
+                            explanation_rows_idx.append({
+                                "Faktor": factor_idx,
+                                "Aktueller Wert": value_idx,
+                                "Modell-Wichtigkeit": float(importance_val_idx),
+                                "Tendenz aus dem Wert": tendency_idx,
+                                "Was bedeutet das?": meaning_idx,
+                            })
+                        st.markdown("#### Warum kommt dieser Bias zustande?")
+                        st.write(
+                            f"Das Modell schätzt für **{selected_index}** über die nächsten **{horizon_idx} Handelstage** "
+                            f"eine Wahrscheinlichkeit von **{current_prob_idx:.1%}** für eine positive Rendite. "
+                            f"Die Einordnung **{bias_idx}** folgt der Regel: über 55 % bullish, unter 45 % bearish, "
+                            "dazwischen neutral."
+                        )
+                        st.dataframe(pd.DataFrame(explanation_rows_idx), use_container_width=True, hide_index=True)
+                        st.caption(
+                            "So liest du die Tabelle: „Modell-Wichtigkeit“ zeigt, welche Faktoren der Random Forest "
+                            "historisch insgesamt oft genutzt hat. „Tendenz aus dem Wert“ erklärt, was der aktuelle "
+                            "Wert des Faktors nahelegt. Das ist eine verständliche Orientierung, aber keine exakte "
+                            "Aufteilung der Modell-Prognose in Beiträge: Faktoren können zusammenwirken, und "
+                            "Volatilität/Saisonalität geben nicht automatisch eine Richtung vor."
+                        )
                         st.markdown("#### Out-of-sample Qualität")
                         q1, q2, q3, q4, q5 = st.columns(5)
                         q1.metric("Accuracy", f"{acc_idx:.1%}")
