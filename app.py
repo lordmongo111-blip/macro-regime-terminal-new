@@ -1888,6 +1888,66 @@ elif page == "Index Macro & Seasonality":
                 season_display["win_rate"] = (season_display["win_rate"] * 100).round(1)
                 season_display = season_display.rename(columns={"avg_return": "Ø Rendite %", "median_return": "Median %", "win_rate": "Positive Monate %", "observations": "Anzahl Monate"})
                 st.dataframe(season_display, use_container_width=True)
+
+                # Transparent index bias: technical trend is the confirmation gate;
+                # seasonality is a secondary directional input. No macro/COT score is
+                # invented because this page does not load validated index-specific data for them.
+                st.markdown("#### Index-Bias: Warum bullish, bearish oder neutral?")
+                current_month = datetime.now().month
+                current_month_name = MONTHS[current_month - 1]
+                current_season = seasonal.iloc[current_month - 1]
+                season_mean = float(current_season["avg_return"]) if pd.notna(current_season["avg_return"]) else np.nan
+                season_obs = int(current_season["observations"]) if pd.notna(current_season["observations"]) else 0
+
+                if np.isfinite([last, ret20, ret60, sma50, sma200]).all():
+                    if last > sma50 > sma200 and ret20 > 0 and ret60 > 0:
+                        index_tech_score = 100
+                        index_tech_label = "Bullish bestätigt: Kurs > SMA 50 > SMA 200; 20T- und 60T-Momentum positiv"
+                    elif last < sma50 < sma200 and ret20 < 0 and ret60 < 0:
+                        index_tech_score = -100
+                        index_tech_label = "Bearish bestätigt: Kurs < SMA 50 < SMA 200; 20T- und 60T-Momentum negativ"
+                    else:
+                        index_tech_score = 0
+                        index_tech_label = "Gemischt: Trend- und Momentum-Bedingungen bestätigen keine gemeinsame Richtung"
+                else:
+                    index_tech_score = 0
+                    index_tech_label = "Technische Daten unvollständig"
+
+                if np.isfinite(season_mean) and season_obs >= 5:
+                    index_season_score = int(round(float(np.clip(season_mean / 0.02 * 100, -100, 100))) )
+                    index_season_label = f"{current_month_name}: historische Ø Monatsrendite {season_mean:+.2%} aus {season_obs} Beobachtungen"
+                    season_valid_for_bias = True
+                else:
+                    index_season_score = 0
+                    index_season_label = f"{current_month_name}: zu wenige valide Monatsbeobachtungen (mindestens 5 erforderlich)"
+                    season_valid_for_bias = False
+
+                index_composite = int(round(0.70 * index_tech_score + 0.30 * index_season_score))
+                if season_valid_for_bias and index_tech_score == 100 and index_composite >= 20:
+                    index_bias = "LONG / BULLISH"
+                elif season_valid_for_bias and index_tech_score == -100 and index_composite <= -20:
+                    index_bias = "SHORT / BEARISH"
+                else:
+                    index_bias = "NEUTRAL"
+
+                b1, b2, b3 = st.columns(3)
+                b1.metric("Index-Bias (Regelmodell)", index_bias)
+                b2.metric("Gewichteter Score", f"{index_composite:+d} / 100")
+                b3.metric("Technische Bestätigung", "Bullish" if index_tech_score == 100 else "Bearish" if index_tech_score == -100 else "Gemischt")
+                st.caption("Transparente Regelversion: Technik 70 %, aktuelle Kalender-Monats-Saisonalität 30 %. LONG/SHORT wird nur ausgegeben, wenn Technik die Richtung vollständig bestätigt und der Score mindestens +20 bzw. höchstens −20 erreicht. Dies ist ein zusätzlicher Research-Proxy, kein Backtest-validiertes Handelssignal.")
+                bias_detail = pd.DataFrame([
+                    {"Faktor": "Technik (70 %)", "Rohwert": index_tech_score, "Gewichteter Beitrag": round(0.70 * index_tech_score, 1), "Erklärung": index_tech_label},
+                    {"Faktor": f"Saisonalität (30 %)", "Rohwert": index_season_score, "Gewichteter Beitrag": round(0.30 * index_season_score, 1), "Erklärung": index_season_label},
+                ])
+                st.dataframe(bias_detail, use_container_width=True, hide_index=True)
+                if index_bias == "LONG / BULLISH":
+                    st.success(f"Warum LONG? Der technische Trend ist aufwärtsgerichtet und bestätigt die Richtung. Die historische Saisonalität für {current_month_name} ergibt einen Gesamt-Score von {index_composite:+d}/100.")
+                elif index_bias == "SHORT / BEARISH":
+                    st.error(f"Warum SHORT? Der technische Trend ist abwärtsgerichtet und bestätigt die Richtung. Die historische Saisonalität für {current_month_name} ergibt einen Gesamt-Score von {index_composite:+d}/100.")
+                else:
+                    st.info(f"Warum NEUTRAL? LONG/SHORT wird nicht freigegeben, wenn Technik und Saisonalität keine ausreichende, bestätigte Richtung ergeben oder zu wenige Saisonbeobachtungen vorliegen. Aktueller Regel-Score: {index_composite:+d}/100.")
+                st.warning("Wichtige Abgrenzung: Anders als FX Signal enthält diese Index-Bias-Regel aktuell keinen quantitativen Makro- oder COT-Beitrag. Die oben genannten Fundamental-Treiber sind Research-Kontext und fließen nicht in diesen Score ein. Für eine gleichwertige Makro-/COT-Engine müssten passende, frische und korrekt zugeordnete Daten integriert werden.")
+
                 # Calendar-year performance and drawdown, derived only from loaded historical prices.
                 annual = close.resample("YE").last().pct_change().dropna() * 100
                 if not annual.empty:
