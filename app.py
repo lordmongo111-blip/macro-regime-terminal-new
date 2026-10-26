@@ -481,7 +481,7 @@ st.warning("Datenstatus: Ohne konfigurierte Datenquelle werden keine aktuellen M
 with st.sidebar:
     st.markdown('<div class="brand"><div class="logo"><span>◇</span></div><div><div class="brand-title" style="font-size:16px">MACRO / REGIME</div><div class="brand-sub" style="font-size:10px">FX · Makro · COT · Quant</div></div></div>', unsafe_allow_html=True)
     st.header("Einstellungen")
-    page = st.radio("Modul", ["Übersicht", "FX Signal", "ML Lab", "Saisonalität", "COT / Positioning", "NQ & ES", "Quant & Regression", "Paper Trading", "Datenquellen"])
+    page = st.radio("Modul", ["Übersicht", "FX Signal", "ML Lab", "Saisonalität", "COT / Positioning", "NQ & ES", "Index Macro & Seasonality", "Quant & Regression", "Datenquellen"])
     st.divider()
     try:
         saved_fred_key = st.secrets.get("FRED_API_KEY", "")
@@ -1594,119 +1594,109 @@ elif page == "Quant & Regression":
     st.markdown("#### Risk regime inputs")
     st.write("Noch nicht bewertet: Aktienbreite, Realrenditen, Kreditspreads, Dollartrend und Volatilität. Keine Risk-on/off-Klassifikation ohne verifizierte Inputs.")
 
-elif page == "Paper Trading":
-    st.subheader("Fundamental Bias & Paper Trading")
-    st.caption("Entscheidungshilfe und Journal – keine Live-Orders. Der Bias ist ein transparenter, manuell bewerteter Überblick und keine automatisch validierte Prognose.")
 
-    st.markdown("### 1. Fundamental Bias")
-    st.write("Bewerte die verfügbaren Komponenten anhand deiner aktuellen Analyse. Nicht geprüfte oder fehlende Informationen auf ‚Neutral / nicht verfügbar‘ lassen.")
-    bias_cols = st.columns(4)
-    bias_options = ["Bullish", "Neutral / nicht verfügbar", "Bearish"]
-    with bias_cols[0]:
-        macro_bias = st.selectbox("Makro", bias_options, index=1, key="pt_macro_bias")
-    with bias_cols[1]:
-        cot_bias = st.selectbox("COT / Positionierung", bias_options, index=1, key="pt_cot_bias")
-    with bias_cols[2]:
-        seasonal_bias = st.selectbox("Saisonalität", bias_options, index=1, key="pt_seasonal_bias")
-    with bias_cols[3]:
-        trend_bias = st.selectbox("Trend / Preis", bias_options, index=1, key="pt_trend_bias")
-
-    def _bias_score(v):
-        return 1 if v == "Bullish" else (-1 if v == "Bearish" else 0)
-    _bias_values = [macro_bias, cot_bias, seasonal_bias, trend_bias]
-    _bias_scores = [_bias_score(v) for v in _bias_values]
-    _bias_sum = sum(_bias_scores)
-    _bias_valid = sum(v != "Neutral / nicht verfügbar" for v in _bias_values)
-    if _bias_valid < 2:
-        _bias_label, _bias_color = "UNBESTIMMT", "#94a3b8"
-        _bias_reason = "Mindestens zwei Komponenten müssen bewertet sein. Fehlende Daten werden nicht als neutrale Marktbelege interpretiert."
-    elif _bias_sum >= 2:
-        _bias_label, _bias_color = "BULLISH BIAS", "#2ecf91"
-        _bias_reason = "Mehrheit der bewerteten Komponenten spricht auf dieser vereinfachten Skala nach oben."
-    elif _bias_sum <= -2:
-        _bias_label, _bias_color = "BEARISH BIAS", "#ff6b6b"
-        _bias_reason = "Mehrheit der bewerteten Komponenten spricht auf dieser vereinfachten Skala nach unten."
+elif page == "Index Macro & Seasonality":
+    st.subheader("Cash Indices — Macro Regime & Seasonality")
+    st.caption("Analyse für die acht Alpha Capital Group Cash-Index-Symbole. Historische Preise werden über verfügbare Yahoo Finance-Proxies geladen; diese sind nicht zwingend identisch mit dem Broker-CFD und nicht als Echtzeit-/Ausführungskurse zu verstehen.")
+    index_specs = {
+        "EUSTX50": {"name": "EURO STOXX 50", "proxy": "^STOXX50E", "region": "Eurozone", "drivers": "EZB-Leitzinsen und Kommunikation; Eurozone HICP/Inflation; PMI/Industrie und Wachstum; EUR-Wechselkurs; Banken- und Unternehmensgewinne.", "rates": "EZB", "fx": "EUR"},
+        "GER30": {"name": "Germany 40 / DAX", "proxy": "^GDAXI", "region": "Deutschland", "drivers": "EZB-Zinspfad; deutscher Ifo/PMI und Industrieaufträge; Exportnachfrage, Energiepreise und EUR; globale Industriekonjunktur und DAX-Gewinne.", "rates": "EZB", "fx": "EUR"},
+        "HK50": {"name": "Hang Seng Index", "proxy": "^HSI", "region": "Hongkong / China", "drivers": "China-PMI und Kreditimpulse; PBoC-Liquidität; Immobiliensektor und regulatorische Maßnahmen; CNH/CNY; US-China-Handels- und Technologierisiken.", "rates": "PBoC / Fed / HKMA", "fx": "HKD/CNH"},
+        "JPN225": {"name": "Nikkei 225", "proxy": "^N225", "region": "Japan", "drivers": "BoJ-Politik und JGB-Renditen; USD/JPY und Yen-Stärke; Löhne/Inflation; Exportdaten; globale Chip- und Industrienachfrage.", "rates": "BoJ", "fx": "JPY"},
+        "NAS100": {"name": "Nasdaq-100", "proxy": "^NDX", "region": "USA — Growth / Tech", "drivers": "US Treasury-Renditen, besonders 2Y/10Y; Fed und Inflation; Mega-Cap-Gewinne und Guidance; Halbleiter-/AI-Investitionen; Bewertungs- und Liquiditätsbedingungen.", "rates": "Fed", "fx": "USD"},
+        "UK100": {"name": "FTSE 100", "proxy": "^FTSE", "region": "Vereinigtes Königreich", "drivers": "BoE und UK-Inflation/Löhne; GBP-Wechselkurs; Energie-, Bergbau- und Rohstoffpreise; globaler Umsatzanteil der FTSE-Konzerne; UK-Wachstum.", "rates": "BoE", "fx": "GBP"},
+        "US30": {"name": "Dow Jones Industrial Average", "proxy": "^DJI", "region": "USA — Large Cap / Industrials", "drivers": "Fed und US-Renditen; Arbeitsmarkt und ISM; Industrie-/Finanzwerte und Unternehmensgewinne; Kreditbedingungen; defensiver vs. zyklischer Sektor-Mix.", "rates": "Fed", "fx": "USD"},
+        "US500": {"name": "S&P 500", "proxy": "^GSPC", "region": "USA — Broad Market", "drivers": "Fed, Inflation und reale Renditen; Arbeitsmarkt und Wachstum; Gewinnrevisionen und Margen; Kreditspreads/Liquidität; Marktbreite und Bewertungsniveau.", "rates": "Fed", "fx": "USD"},
+    }
+    selected_index = st.selectbox("Alpha Capital Group Symbol", list(index_specs), format_func=lambda s: f"{s} — {index_specs[s]['name']}")
+    spec = index_specs[selected_index]
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Markt", selected_index)
+    c2.metric("Makroregion", spec["region"])
+    c3.metric("Zentralbank-Fokus", spec["rates"])
+    st.markdown("#### Fundamental-Checkliste")
+    st.write(spec["drivers"])
+    st.info("Das ist ein transparenter Research-Rahmen, kein automatisch gemessener Fundamental-Score. Es werden keine unbekannten Makrodaten oder Konsensüberraschungen erfunden. Für einen quantitativen Live-Makro-Score müssen frische, länderspezifische Serien geladen und auf Veröffentlichungszeitpunkt/Revision geprüft werden.")
+    st.markdown("#### Historische Kurs- und Saisonanalyse")
+    history_period = st.selectbox("Historienlänge", ["5y", "10y", "max"], index=1, key="index_history_period")
+    if st.button("Index-Historie laden und Saisonmuster berechnen", type="primary", key="load_index_history"):
+        try:
+            prices = load_market_history(spec["proxy"], history_period)
+            if prices.empty or len(prices) < 260:
+                st.error(f"Zu wenig Kursdaten für {selected_index} über Proxy {spec['proxy']}. Saison- und Regime-Auswertung bleibt gesperrt.")
+            else:
+                prices = prices.copy()
+                prices["date"] = pd.to_datetime(prices["date"], errors="coerce")
+                prices["close"] = pd.to_numeric(prices["close"], errors="coerce")
+                prices = prices.dropna(subset=["date", "close"]).sort_values("date")
+                close = prices.set_index("date")["close"]
+                last = float(close.iloc[-1])
+                ret20 = float(close.pct_change(20).iloc[-1])
+                ret60 = float(close.pct_change(60).iloc[-1])
+                sma50 = float(close.rolling(50).mean().iloc[-1])
+                sma200 = float(close.rolling(200).mean().iloc[-1])
+                regime = "NEUTRAL / GEMISCHT"
+                if np.isfinite([last, ret20, ret60, sma50, sma200]).all():
+                    if last > sma50 > sma200 and ret20 > 0 and ret60 > 0:
+                        regime = "TREND AUFWÄRTS (technischer Proxy)"
+                    elif last < sma50 < sma200 and ret20 < 0 and ret60 < 0:
+                        regime = "TREND ABWÄRTS (technischer Proxy)"
+                k1, k2, k3, k4 = st.columns(4)
+                k1.metric("Letzter Proxy-Schlusskurs", f"{last:,.2f}")
+                k2.metric("20 Handelstage", f"{ret20:+.2%}")
+                k3.metric("60 Handelstage", f"{ret60:+.2%}")
+                k4.metric("Technischer Regime-Proxy", regime)
+                st.caption(f"Proxy: {spec['proxy']} · Beobachtungen: {len(prices):,} · Letztes Datum: {prices['date'].iloc[-1].date()} · Datenanbieter: Yahoo Finance/yfinance")
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=prices["date"], y=prices["close"], mode="lines", name="Schlusskurs"))
+                fig.add_trace(go.Scatter(x=prices["date"], y=close.rolling(50).mean().values, mode="lines", name="SMA 50"))
+                fig.add_trace(go.Scatter(x=prices["date"], y=close.rolling(200).mean().values, mode="lines", name="SMA 200"))
+                fig.update_layout(title=f"{selected_index} — Kurs & Trend (Proxy)", xaxis_title="Datum", yaxis_title="Indexpunkte", hovermode="x unified")
+                st.plotly_chart(fig, use_container_width=True)
+                # Calendar-month seasonality: average return and empirical win rate by month.
+                monthly_close = close.resample("ME").last().dropna()
+                monthly_returns = monthly_close.pct_change().dropna()
+                season_df = pd.DataFrame({"return": monthly_returns})
+                season_df["month"] = season_df.index.month
+                seasonal = season_df.groupby("month")["return"].agg(
+                    avg_return="mean",
+                    median_return="median",
+                    win_rate=lambda x: float((x > 0).mean()),
+                    observations="count"
+                ).reindex(range(1, 13))
+                seasonal.index = [MONTHS[m-1] for m in seasonal.index]
+                fig_season = go.Figure()
+                fig_season.add_trace(go.Bar(x=seasonal.index, y=seasonal["avg_return"] * 100, name="Ø Monatsrendite (%)"))
+                fig_season.add_trace(go.Scatter(x=seasonal.index, y=seasonal["win_rate"] * 100, mode="lines+markers", name="Historische Gewinnquote (%)", yaxis="y2"))
+                fig_season.update_layout(title=f"{selected_index} — Kalender-Monats-Saisonalität", xaxis_title="Kalendermonat", yaxis_title="Ø Monatsrendite (%)", yaxis2=dict(title="Gewinnquote (%)", overlaying="y", side="right", range=[0, 100]), hovermode="x unified")
+                st.plotly_chart(fig_season, use_container_width=True)
+                season_display = seasonal.copy()
+                season_display["avg_return"] = (season_display["avg_return"] * 100).round(2)
+                season_display["median_return"] = (season_display["median_return"] * 100).round(2)
+                season_display["win_rate"] = (season_display["win_rate"] * 100).round(1)
+                season_display = season_display.rename(columns={"avg_return": "Ø Rendite %", "median_return": "Median %", "win_rate": "Positive Monate %", "observations": "Anzahl Monate"})
+                st.dataframe(season_display, use_container_width=True)
+                # Calendar-year performance and drawdown, derived only from loaded historical prices.
+                annual = close.resample("YE").last().pct_change().dropna() * 100
+                if not annual.empty:
+                    annual_df = annual.rename("Jahresrendite %").to_frame()
+                    annual_df.index = annual_df.index.year
+                    st.markdown("#### Kalenderjahresrenditen")
+                    st.bar_chart(annual_df)
+                if len(monthly_returns) < 60:
+                    st.warning("Weniger als 5 Jahre monatlicher Renditen: Saisonmuster sind statistisch schwach und können stark vom Zeitraum abhängen.")
+                st.download_button("Saison-Daten als CSV exportieren", data=seasonal.reset_index(names="Monat").to_csv(index=False).encode("utf-8-sig"), file_name=f"{selected_index.lower()}_seasonality.csv", mime="text/csv")
+        except Exception as exc:
+            st.error(f"Historienabruf/Analyse fehlgeschlagen: {exc}")
+            st.caption("Prüfe Internetzugriff, yfinance-Verfügbarkeit und die Symbolabdeckung des Datenanbieters.")
     else:
-        _bias_label, _bias_color = "MIXED / NEUTRAL", "#f4bd50"
-        _bias_reason = "Die bewerteten Komponenten sind gemischt oder zu schwach für eine klare Richtung."
-    _bc1, _bc2, _bc3 = st.columns([1.2, 1, 2])
-    _bc1.metric("Fundamental Bias", _bias_label)
-    _bc2.metric("Bewertete Komponenten", f"{_bias_valid}/4")
-    _bc3.markdown(f'<div style="border:1px solid #263849;border-radius:10px;padding:12px;color:{_bias_color};min-height:60px">{_bias_reason}</div>', unsafe_allow_html=True)
-    st.caption("Diese einfache Abstimmung ist bewusst kein Backtest oder automatischer Daten-Score. Vor einer Nutzung als Entscheidungshilfe sollten die Regeln dokumentiert und mit historischen Daten geprüft werden.")
-
-    st.divider()
-    st.markdown("### 2. Paper-Trade erfassen")
-    if "paper_trades" not in st.session_state:
-        st.session_state["paper_trades"] = []
-    with st.form("paper_trade_entry_form", clear_on_submit=True):
-        _c1, _c2, _c3 = st.columns(3)
-        _instrument = _c1.text_input("Instrument", value="EUR/USD", help="Beispiel: EUR/USD, NQ, ES, Gold")
-        _direction = _c2.selectbox("Richtung", ["Long", "Short"])
-        _status = _c3.selectbox("Status", ["Geplant", "Offen", "Geschlossen"])
-        _c4, _c5, _c6 = st.columns(3)
-        _entry = _c4.number_input("Entry", min_value=0.0, value=1.0, format="%.6f")
-        _stop = _c5.number_input("Stop-Loss (optional: 0 = leer)", min_value=0.0, value=0.0, format="%.6f")
-        _target = _c6.number_input("Take-Profit (optional: 0 = leer)", min_value=0.0, value=0.0, format="%.6f")
-        _c7, _c8, _c9 = st.columns(3)
-        _size = _c7.number_input("Positionsgröße / Einheiten", min_value=0.0, value=1.0, format="%.4f")
-        _risk_pct = _c8.number_input("Geplantes Risiko (%)", min_value=0.0, max_value=100.0, value=1.0, step=0.25)
-        _bias_at_entry = _c9.selectbox("Bias bei Erfassung", ["Bullish", "Bearish", "Mixed / Neutral", "Unbestimmt"], index=["BULLISH BIAS", "BEARISH BIAS", "MIXED / NEUTRAL", "UNBESTIMMT"].index(_bias_label))
-        _notes = st.text_input("Setup / Notiz", placeholder="z. B. Makro-Bias bestätigt, Entry nach Retest")
-        _submit_trade = st.form_submit_button("Paper-Trade speichern", type="primary")
-    if _submit_trade:
-        if not _instrument.strip():
-            st.error("Bitte ein Instrument angeben.")
-        elif _entry <= 0:
-            st.error("Entry muss größer als 0 sein.")
-        elif _direction == "Long" and ((_stop > 0 and _stop >= _entry) or (_target > 0 and _target <= _entry)):
-            st.error("Bei Long muss der Stop unter Entry und das Ziel über Entry liegen.")
-        elif _direction == "Short" and ((_stop > 0 and _stop <= _entry) or (_target > 0 and _target >= _entry)):
-            st.error("Bei Short muss der Stop über Entry und das Ziel unter Entry liegen.")
-        else:
-            import uuid as _uuid
-            st.session_state["paper_trades"].append({
-                "ID": _uuid.uuid4().hex[:8], "Erstellt (UTC)": pd.Timestamp.now(tz="UTC").isoformat(),
-                "Instrument": _instrument.strip().upper(), "Richtung": _direction, "Status": _status,
-                "Entry": float(_entry), "Stop": float(_stop) if _stop > 0 else np.nan,
-                "Ziel": float(_target) if _target > 0 else np.nan, "Positionsgröße": float(_size),
-                "Risiko (%)": float(_risk_pct), "Bias": _bias_at_entry, "Setup / Notiz": _notes.strip(),
-                "Exit": np.nan, "Ergebnis (R)": np.nan, "Ergebnis (%)": np.nan
-            })
-            st.success("Paper-Trade im aktuellen App-Sitz gespeichert. Es wurde keine Order an einen Broker gesendet.")
-            st.rerun()
-
-    _trades = st.session_state["paper_trades"]
-    if _trades:
-        st.markdown("### 3. Journal und Ergebnisse")
-        _trade_df = pd.DataFrame(_trades)
-        _m1, _m2, _m3, _m4 = st.columns(4)
-        _m1.metric("Paper-Trades", len(_trade_df))
-        _m2.metric("Offen / geplant", int(_trade_df["Status"].isin(["Offen", "Geplant"]).sum()))
-        _closed = _trade_df.loc[_trade_df["Status"] == "Geschlossen"].copy()
-        _m3.metric("Geschlossen", len(_closed))
-        _wr = np.nan
-        if "Ergebnis (R)" in _closed and _closed["Ergebnis (R)"].notna().any():
-            _wr = (_closed["Ergebnis (R)"].dropna() > 0).mean() * 100
-        _m4.metric("Gewinnrate (mit Exit-Daten)", "—" if pd.isna(_wr) else f"{_wr:.1f}%")
-        st.caption("Für geschlossene Trades Exit und Ergebnis im Editor ergänzen. R-Multiple wird nicht automatisch geschätzt, wenn Stop/Exit oder Tick-/Kontraktwert nicht zuverlässig bekannt sind.")
-        _edited = st.data_editor(_trade_df, use_container_width=True, hide_index=True, num_rows="fixed", key="paper_trade_editor", column_config={
-            "Status": st.column_config.SelectboxColumn("Status", options=["Geplant", "Offen", "Geschlossen"]),
-            "Richtung": st.column_config.SelectboxColumn("Richtung", options=["Long", "Short"]),
-            "Exit": st.column_config.NumberColumn("Exit", min_value=0.0, format="%.6f"),
-            "Ergebnis (R)": st.column_config.NumberColumn("Ergebnis (R)", format="%.2f"),
-            "Ergebnis (%)": st.column_config.NumberColumn("Ergebnis (%)", format="%.2f")
-        })
-        if st.button("Änderungen im Journal übernehmen", type="primary"):
-            st.session_state["paper_trades"] = _edited.to_dict(orient="records")
-            st.success("Journal aktualisiert.")
-            st.rerun()
-        st.download_button("Paper-Trading-Journal als CSV herunterladen", data=_trade_df.to_csv(index=False).encode("utf-8-sig"), file_name="macro_regime_paper_trading_journal.csv", mime="text/csv")
-        if st.button("Alle Paper-Trades löschen", type="secondary"):
-            st.session_state["paper_trades"] = []
-            st.rerun()
-    else:
-        st.info("Noch keine Paper-Trades erfasst. Das Journal wird in der aktuellen Streamlit-Sitzung gehalten; exportiere es regelmäßig als CSV, um deine Daten dauerhaft zu sichern.")
+        st.info("Klicke auf „Index-Historie laden…“, um die Historie abzurufen. Ohne erfolgreichen Abruf wird kein saisonales Ergebnis behauptet.")
+    st.markdown("#### Wie das in den Gesamt-Workflow passt")
+    st.write("- Saisonality: historische Kalender-Monatsrenditen, Median und Gewinnquote.")
+    st.write("- Regime: SMA50/SMA200 plus 20-/60-Tage-Momentum — ausdrücklich ein technischer Proxy, kein Fundamental-Makroregime.")
+    st.write("- Fundamentals: die oben genannten länderspezifischen Treiber sind Research-Kontext. Für eine automatische Richtungsbewertung braucht es echte, frische Daten und klare Gewichtung.")
+    st.write("- COT: nur dann verwenden, wenn ein passender, korrekt zugeordneter Futures-Kontrakt und ein validierter CFTC-Datensatz vorhanden sind; nicht einfach den Cash-Index-Ticker als COT-Kontrakt behandeln.")
+    st.write("- Paper Trading: bestehendes manuelles Journal bleibt separat und kann für diese Symbole über das Markt-/Notizfeld dokumentiert werden.")
 
 else:
     st.subheader("Datenquellen & Aktualität")
