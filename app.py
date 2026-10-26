@@ -481,7 +481,7 @@ st.warning("Datenstatus: Ohne konfigurierte Datenquelle werden keine aktuellen M
 with st.sidebar:
     st.markdown('<div class="brand"><div class="logo"><span>◇</span></div><div><div class="brand-title" style="font-size:16px">MACRO / REGIME</div><div class="brand-sub" style="font-size:10px">FX · Makro · COT · Quant</div></div></div>', unsafe_allow_html=True)
     st.header("Einstellungen")
-    page = st.radio("Modul", ["Übersicht", "FX Signal", "ML Lab", "Saisonalität", "COT / Positioning", "NQ & ES", "Index Macro & Seasonality", "Quant & Regression", "Datenquellen"])
+    page = st.radio("Modul", ["Übersicht", "FX Signal", "ML Lab", "Index ML Lab", "Saisonalität", "COT / Positioning", "NQ & ES", "Index Macro & Seasonality", "Quant & Regression", "Datenquellen"])
     st.divider()
     try:
         saved_fred_key = st.secrets.get("FRED_API_KEY", "")
@@ -1228,6 +1228,146 @@ elif page == "ML Lab":
                             st.error("scikit-learn fehlt. Ergänze `scikit-learn` in requirements.txt und deploye die App erneut.")
         except Exception as exc:
             st.error(f"ML Lab fehlgeschlagen: {exc}")
+
+elif page == "Index ML Lab":
+    st.subheader("Index ML Lab — probabilistischer Bias")
+    st.caption("Chronologischer Holdout-Test für Indexmärkte. Modellfaktoren: Trend, Momentum, Volatilität und Kalendersaisonalität. VIX und US-Renditen werden separat als Kontext angezeigt, nicht als Modellfeatures, sofern ihre Historie nicht zeitlich sauber verfügbar ist.")
+    index_universe = {
+        "Nasdaq-100 Future (NQ)": "NQ=F",
+        "S&P 500 Future (ES)": "ES=F",
+        "Dow Jones Future (YM)": "YM=F",
+        "Russell 2000 Future (RTY)": "RTY=F",
+        "DAX 40": "^GDAXI",
+        "FTSE 100": "^FTSE",
+        "Nikkei 225": "^N225",
+    }
+    selected_index = st.selectbox("Index", list(index_universe.keys()), key="index_ml_symbol")
+    horizon_idx = st.selectbox("Prognosehorizont", [5, 10, 20, 40, 60], index=2,
+                               format_func=lambda x: f"{x} Handelstage", key="index_ml_horizon")
+    years_idx = st.selectbox("Historie", ["5y", "10y", "max"], index=1, key="index_ml_years")
+    st.markdown("#### Index-Makro-Kontext")
+    st.caption("Diese Kontextreihen helfen bei der Interpretation, werden aber nicht als bestätigte fundamentale ML-Features ausgegeben.")
+    if st.button("Index-Modell trainieren & testen", type="primary", key="run_index_ml"):
+        try:
+            from sklearn.ensemble import RandomForestClassifier
+            from sklearn.metrics import accuracy_score, balanced_accuracy_score, brier_score_loss, log_loss
+            from sklearn.impute import SimpleImputer
+            with st.spinner("Lade Index- und Kontextdaten; trainiere chronologisch und teste außerhalb der Stichprobe…"):
+                symbol_idx = index_universe[selected_index]
+                raw_idx = load_market_history(symbol_idx, years_idx)
+                if raw_idx.empty or len(raw_idx) < 500:
+                    st.error("Zu wenig Kursdaten. Für den ML-Test werden mindestens 500 tägliche Beobachtungen benötigt.")
+                else:
+                    raw_idx["date"] = pd.to_datetime(raw_idx["date"], errors="coerce")
+                    raw_idx["close"] = pd.to_numeric(raw_idx["close"], errors="coerce")
+                    raw_idx = raw_idx.dropna(subset=["date", "close"]).sort_values("date").drop_duplicates("date")
+                    close_idx = raw_idx.set_index("date")["close"].astype(float)
+                    feat = pd.DataFrame(index=close_idx.index)
+                    daily = close_idx.pct_change()
+                    for lag in [1, 2, 5, 10, 20, 60]:
+                        feat[f"return_{lag}d"] = close_idx.pct_change(lag)
+                    for window in [5, 10, 20, 50, 100, 200]:
+                        feat[f"ma_gap_{window}"] = close_idx / close_idx.rolling(window).mean() - 1
+                    for window in [5, 10, 20, 60]:
+                        feat[f"volatility_{window}d"] = daily.rolling(window).std()
+                    feat["momentum_20_60"] = close_idx.pct_change(20) - close_idx.pct_change(60)
+                    feat["vol_ratio_5_20"] = daily.rolling(5).std() / daily.rolling(20).std()
+                    month_idx = pd.Series(feat.index.month, index=feat.index, dtype=float)
+                    feat["month_sin"] = np.sin(2*np.pi*month_idx/12)
+                    feat["month_cos"] = np.cos(2*np.pi*month_idx/12)
+                    future_return = close_idx.shift(-horizon_idx) / close_idx - 1
+                    dataset_idx = feat.copy()
+                    dataset_idx["future_return"] = future_return
+                    dataset_idx["target"] = (future_return > 0).astype(int)
+                    dataset_idx = dataset_idx.replace([np.inf, -np.inf], np.nan).dropna()
+                    if len(dataset_idx) < 350:
+                        st.error("Nach Feature-Bereinigung bleiben zu wenige Beobachtungen für einen stabilen Test.")
+                    else:
+                        X_idx = dataset_idx.drop(columns=["future_return", "target"])
+                        y_idx = dataset_idx["target"].astype(int)
+                        split_idx = int(len(dataset_idx) * 0.8)
+                        X_train_idx, X_test_idx = X_idx.iloc[:split_idx], X_idx.iloc[split_idx:]
+                        y_train_idx, y_test_idx = y_idx.iloc[:split_idx], y_idx.iloc[split_idx:]
+                        # Fit imputer on training data only; never use future holdout statistics.
+                        imp_idx = SimpleImputer(strategy="median")
+                        X_train_imp = imp_idx.fit_transform(X_train_idx)
+                        X_test_imp = imp_idx.transform(X_test_idx)
+                        model_idx = RandomForestClassifier(n_estimators=400, max_depth=5,
+                            min_samples_leaf=10, class_weight="balanced_subsample",
+                            random_state=42, n_jobs=-1)
+                        model_idx.fit(X_train_imp, y_train_idx)
+                        pred_prob_idx = model_idx.predict_proba(X_test_imp)[:, list(model_idx.classes_).index(1)]
+                        pred_idx = (pred_prob_idx >= 0.5).astype(int)
+                        acc_idx = accuracy_score(y_test_idx, pred_idx)
+                        bacc_idx = balanced_accuracy_score(y_test_idx, pred_idx)
+                        baseline_idx = max(float(y_test_idx.mean()), float(1-y_test_idx.mean()))
+                        brier_idx = brier_score_loss(y_test_idx, pred_prob_idx)
+                        logloss_idx = log_loss(y_test_idx, np.clip(pred_prob_idx, 1e-6, 1-1e-6), labels=[0,1])
+                        current_feat_idx = feat.replace([np.inf, -np.inf], np.nan).dropna().iloc[[-1]]
+                        current_prob_idx = float(model_idx.predict_proba(imp_idx.transform(current_feat_idx[X_idx.columns]))[0, list(model_idx.classes_).index(1)])
+                        if current_prob_idx >= 0.55:
+                            bias_idx = "BULLISH"
+                        elif current_prob_idx <= 0.45:
+                            bias_idx = "BEARISH"
+                        else:
+                            bias_idx = "NEUTRAL"
+                        st.markdown("#### Aktuelle ML-Einschätzung")
+                        m1, m2, m3 = st.columns(3)
+                        m1.metric("Modell-Bias", bias_idx)
+                        m2.metric("P(positive Rendite)", f"{current_prob_idx:.1%}")
+                        m3.metric("Horizont", f"{horizon_idx} Handelstage")
+                        if bias_idx == "BULLISH":
+                            st.success("Die geschätzte Aufwärtswahrscheinlichkeit liegt mindestens 5 Prozentpunkte über 50 %. Das ist ein Modell-Bias, keine Trade-Garantie.")
+                        elif bias_idx == "BEARISH":
+                            st.error("Die geschätzte Aufwärtswahrscheinlichkeit liegt mindestens 5 Prozentpunkte unter 50 %. Das ist ein Modell-Bias, keine Trade-Garantie.")
+                        else:
+                            st.info("Die Modellwahrscheinlichkeit liegt nahe 50 %; kein klarer Richtungs-Bias.")
+                        st.markdown("#### Out-of-sample Qualität")
+                        q1, q2, q3, q4, q5 = st.columns(5)
+                        q1.metric("Accuracy", f"{acc_idx:.1%}")
+                        q2.metric("Balanced accuracy", f"{bacc_idx:.1%}")
+                        q3.metric("Mehrheits-Baseline", f"{baseline_idx:.1%}")
+                        q4.metric("Brier ↓", f"{brier_idx:.3f}")
+                        q5.metric("Log Loss ↓", f"{logloss_idx:.3f}")
+                        st.caption(f"Chronologischer 80/20-Holdout: {X_test_idx.index.min().date()} bis {X_test_idx.index.max().date()} · {len(X_test_idx)} Testfälle. Überlappende Prognosehorizonte und Transaktionskosten sind nicht bereinigt.")
+                        if bacc_idx <= 0.52 or bacc_idx <= baseline_idx - 0.03:
+                            st.warning("Kein überzeugender Richtungs-Vorteil gegenüber der Baseline im Holdout. Modellwahrscheinlichkeit vorsichtig interpretieren.")
+                        importance_idx = pd.DataFrame({"Faktor": X_idx.columns, "Wichtigkeit": model_idx.feature_importances_}).sort_values("Wichtigkeit", ascending=False)
+                        st.markdown("#### Wichtigste ML-Faktoren")
+                        st.dataframe(importance_idx.head(15), use_container_width=True, hide_index=True)
+                        fig_idx = go.Figure()
+                        fig_idx.add_trace(go.Scatter(x=X_test_idx.index, y=pred_prob_idx*100, mode="lines", name="P(Aufwärts)"))
+                        fig_idx.add_hline(y=50, line_dash="dash", line_color="gray")
+                        fig_idx.update_layout(title=f"{selected_index} — Holdout-Prognosen", xaxis_title="Datum", yaxis_title="P(Aufwärts) %", yaxis=dict(range=[0,100]), height=350)
+                        st.plotly_chart(fig_idx, use_container_width=True)
+                        hist_idx = pd.DataFrame({"P(Aufwärts) %": pred_prob_idx*100,
+                            "Modellrichtung": np.where(pred_idx == 1, "AUFWÄRTS", "ABWÄRTS"),
+                            "Tatsächlich": np.where(y_test_idx.to_numpy() == 1, "AUFWÄRTS", "ABWÄRTS"),
+                            "Zielrendite %": dataset_idx.loc[X_test_idx.index, "future_return"].to_numpy()*100}, index=X_test_idx.index)
+                        st.dataframe(hist_idx.tail(30), use_container_width=True)
+                        # Separate context panel: fresh historical proxies only, not fed to classifier.
+                        context_rows_idx = []
+                        for context_name, context_symbol in [("VIX", "^VIX"), ("US 10Y yield proxy", "^TNX"), ("USD index proxy", "DX-Y.NYB")]:
+                            try:
+                                context_df = load_market_history(context_symbol, "1y")
+                                if not context_df.empty:
+                                    last_ctx = context_df.iloc[-1]
+                                    age_ctx = (pd.Timestamp.now().normalize() - pd.Timestamp(last_ctx["date"]).normalize()).days
+                                    context_rows_idx.append({"Kontext": context_name, "Symbol": context_symbol,
+                                        "Letzter Wert": float(last_ctx["close"]), "Datenstand": str(pd.Timestamp(last_ctx["date"]).date()),
+                                        "Alter (Tage)": age_ctx, "Status": "OK" if age_ctx <= 4 else "VERALTET"})
+                            except Exception as context_exc:
+                                context_rows_idx.append({"Kontext": context_name, "Symbol": context_symbol, "Status": f"FEHLER: {context_exc}"})
+                        st.markdown("#### Makro-/Risk-Kontext (separat, kein ML-Feature)")
+                        if context_rows_idx:
+                            st.dataframe(pd.DataFrame(context_rows_idx), use_container_width=True, hide_index=True)
+                        else:
+                            st.info("VIX-/Rendite-/USD-Kontextdaten nicht verfügbar.")
+                        st.caption("Methodik: Random Forest, chronologischer 80/20-Holdout, technische Preis-/Volatilitäts-/Momentum-Features plus Kalender-Saisonalität. Fundamentaldaten, COT, Marktbreite, Earnings und News sind nicht im Modell enthalten. Daten kommen aus yfinance und können verzögert oder unvollständig sein; kein Netto-Backtest und keine Anlageberatung.")
+        except ImportError:
+            st.error("scikit-learn fehlt. Ergänze `scikit-learn` in requirements.txt und deploye die App erneut.")
+        except Exception as exc:
+            st.error(f"Index ML Lab fehlgeschlagen: {exc}")
 
 elif page == "Saisonalität":
     st.subheader("Seasonality Terminal")
