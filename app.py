@@ -1346,14 +1346,30 @@ elif page == "Saisonalität":
                                     annualized = ((1 + avg_ret) ** (252 / max(1, int(horizon))) - 1) if avg_ret > -1 else np.nan
 
                                     st.caption(f"Quelle: load_market_history · Symbol {symbols[label]} · {d.index.min().date()} bis {d.index.max().date()} · {len(d):,} valide Kurse · {n} auswertbare Kalenderjahre.")
+                                    # Smooth daily noise so the chart communicates the seasonal pattern rather than each year's day-to-day FX noise.
+                                    seasonal["mean_smooth"] = seasonal["mean"].rolling(window=9, center=True, min_periods=1).mean()
                                     fig = go.Figure()
-                                    selected_season = (seasonal["date"].dt.strftime("%m-%d") >= start_key) & (seasonal["date"].dt.strftime("%m-%d") <= end_key) if start_key <= end_key else ((seasonal["date"].dt.strftime("%m-%d") >= start_key) | (seasonal["date"].dt.strftime("%m-%d") <= end_key))
-                                    fig.add_trace(go.Scatter(x=seasonal["date"], y=seasonal["mean"], mode="lines", name="Ø saisonaler Kursindex", line=dict(color="#4bb5cc", width=2.5), customdata=seasonal[["count"]], hovertemplate="%{x|%b %d}<br>Ø Index: %{y:.2f}<br>Jahresbeobachtungen: %{customdata[0]}<extra></extra>"))
+                                    date_keys = seasonal["date"].dt.strftime("%m-%d")
+                                    selected_season = (date_keys >= start_key) & (date_keys <= end_key) if start_key <= end_key else ((date_keys >= start_key) | (date_keys <= end_key))
+                                    # Thin raw line remains visible for context; bold rolling average is the primary seasonal curve.
+                                    fig.add_trace(go.Scatter(x=seasonal["date"], y=seasonal["mean"], mode="lines", name="Tagesmittel (ungeglättet)", line=dict(color="rgba(75,181,204,0.28)", width=1), customdata=seasonal[["count"]], hovertemplate="%{x|%d. %b}<br>Index: %{y:.2f}<br>Jahresbeobachtungen: %{customdata[0]}<extra></extra>"))
+                                    fig.add_trace(go.Scatter(x=seasonal["date"], y=seasonal["mean_smooth"], mode="lines", name="Saisonaler Durchschnitt (9-Tage-Glättung)", line=dict(color="#42c5df", width=3.2, shape="spline", smoothing=0.55), hovertemplate="%{x|%d. %b}<br>Geglätteter Index: %{y:.2f}<extra></extra>"))
                                     if selected_season.any():
-                                        fig.add_vrect(x0=pd.to_datetime("2000-" + start_key, errors="coerce"), x1=pd.to_datetime("2000-" + end_key, errors="coerce") if start_key <= end_key else pd.to_datetime("2001-" + end_key, errors="coerce"), fillcolor="#4bb5cc", opacity=0.14, line_width=0)
-                                    fig.update_layout(title="Annual Seasonality — durchschnittlicher Kursindex je Kalendertag", xaxis_title="", yaxis_title="Index (Jahresstart = 100)", hovermode="x unified", height=430, margin=dict(l=20, r=20, t=55, b=20), legend=dict(orientation="h", y=1.02, x=0))
-                                    fig.update_xaxes(tickformat="%b", dtick="M1", showgrid=True)
-                                    st.plotly_chart(fig, use_container_width=True)
+                                        x0 = pd.to_datetime("2000-" + start_key, errors="coerce")
+                                        x1 = pd.to_datetime(("2000-" if start_key <= end_key else "2001-") + end_key, errors="coerce")
+                                        if pd.notna(x0) and pd.notna(x1):
+                                            fig.add_vrect(x0=x0, x1=x1, fillcolor="#42c5df", opacity=0.13, line_width=0, layer="below")
+                                            fig.add_vline(x=x0, line_width=1.5, line_color="#b8f3ff", line_dash="dot")
+                                            fig.add_vline(x=x1, line_width=1.5, line_color="#b8f3ff", line_dash="dot")
+                                    fig.update_layout(title=dict(text="ANNUAL SEASONALITY · Durchschnittlicher Kursverlauf", x=0.015, xanchor="left", font=dict(size=16)),
+                                        xaxis_title="Kalenderjahr", yaxis_title="Index (Jahresstart = 100)", hovermode="x unified", height=470,
+                                        margin=dict(l=35, r=20, t=58, b=35), plot_bgcolor="#0b1118", paper_bgcolor="#0b1118",
+                                        font=dict(color="#cbd5e1", size=11), legend=dict(orientation="h", y=1.02, x=0.01),
+                                        hoverlabel=dict(bgcolor="#111b26", bordercolor="#42c5df", font_color="#f1f5f9"))
+                                    fig.update_xaxes(tickformat="%b", dtick="M1", showgrid=True, gridcolor="rgba(148,163,184,0.13)", zeroline=False, tickfont=dict(color="#9ca3af"))
+                                    fig.update_yaxes(showgrid=True, gridcolor="rgba(148,163,184,0.13)", zeroline=False, tickfont=dict(color="#9ca3af"), fixedrange=False)
+                                    st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False, "scrollZoom": True, "modeBarButtonsToAdd": ["select2d", "lasso2d"]})
+                                    st.caption("Die feine Linie zeigt den täglichen Mittelwert; die kräftige Linie glättet kurzfristiges Rauschen über 9 Kalendertage. Das hervorgehobene Fenster entspricht den Saison-Start-/Enddaten.")
                                     st.markdown("#### Ergebnis für den ausgewählten Saisonbereich")
                                     m1, m2, m3, m4 = st.columns(4)
                                     m1.metric("Annualisierte Rendite*", "—" if pd.isna(annualized) else f"{annualized:.2%}")
