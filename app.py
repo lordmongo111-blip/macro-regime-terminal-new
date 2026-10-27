@@ -558,19 +558,62 @@ if page == "Global Event Map":
     st.caption("Nachrichten werden über die öffentliche GDELT-Artikel-Suche geladen. Die Zuordnung zu Märkten ist eine Research-Hilfe; Überschriften und Veröffentlichungszeiten bitte beim Original prüfen.")
     @st.cache_data(ttl=900, show_spinner=False)
     def load_global_headlines():
-        query = '(central bank OR inflation OR tariffs OR sanctions OR oil OR Strait of Hormuz OR Federal Reserve OR ECB OR Bank of Japan OR Taiwan)'
-        params = urllib.parse.urlencode({"query": query, "mode":"ArtList", "format":"json", "maxrecords":"18", "sort":"DateDesc", "timespan":"3d"})
-        url = "https://api.gdeltproject.org/api/v2/doc/doc?" + params
-        req = urllib.request.Request(url, headers={"User-Agent":"MacroRegimeTerminal/1.0"})
-        with urllib.request.urlopen(req, timeout=7) as response:
-            payload = json.loads(response.read().decode("utf-8", errors="replace"))
-        rows = []
-        for item in payload.get("articles", []):
-            title = item.get("title")
-            link = item.get("url")
-            if title and link:
-                rows.append({"Zeit (UTC)":item.get("seendate", ""),"Schlagzeile":title,"Quelle":item.get("domain", "Quelle"),"Link":link})
-        return rows
+        """Fetch GDELT headlines with retries and a simpler fallback query."""
+        import requests
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+
+        session = requests.Session()
+        retry = Retry(
+            total=2, connect=2, read=2, backoff_factor=0.8,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset(["GET"]),
+            respect_retry_after_header=True,
+        )
+        session.mount("https://", HTTPAdapter(max_retries=retry))
+        headers = {
+            "User-Agent": "Mozilla/5.0 (compatible; MacroRegimeTerminal/1.1; +https://gdeltproject.org/)",
+            "Accept": "application/json",
+        }
+        queries = [
+            '(central bank OR inflation OR tariffs OR sanctions OR oil OR "Strait of Hormuz" OR "Federal Reserve" OR ECB OR "Bank of Japan" OR Taiwan)',
+            '(inflation OR "central bank" OR oil OR tariffs)',
+        ]
+        errors = []
+        for query in queries:
+            try:
+                response = session.get(
+                    "https://api.gdeltproject.org/api/v2/doc/doc",
+                    params={
+                        "query": query, "mode": "ArtList", "format": "json",
+                        "maxrecords": 18, "sort": "DateDesc", "timespan": "3d",
+                    },
+                    headers=headers, timeout=(5, 15),
+                )
+                response.raise_for_status()
+                payload = response.json()
+                rows = []
+                for item in payload.get("articles", []):
+                    title = item.get("title")
+                    link = item.get("url")
+                    if title and link:
+                        rows.append({
+                            "Zeit (UTC)": item.get("seendate", ""),
+                            "Schlagzeile": title,
+                            "Quelle": item.get("domain", "Quelle"),
+                            "Link": link,
+                        })
+                if rows:
+                    return rows
+            except (requests.RequestException, ValueError) as exc:
+                errors.append(f"{type(exc).__name__}: {str(exc)[:180]}")
+        if errors:
+            raise RuntimeError("GDELT nicht erreichbar. " + " | ".join(errors))
+        return []
+
+    refresh_news = st.button("Nachrichten jetzt aktualisieren", key="refresh_global_headlines")
+    if refresh_news:
+        load_global_headlines.clear()
     try:
         with st.spinner("Lade aktuelle Schlagzeilen …"):
             headlines = load_global_headlines()
@@ -582,7 +625,7 @@ if page == "Global Event Map":
             st.warning("Die Nachrichtenquelle hat aktuell keine passenden Artikel geliefert. Bitte später erneut versuchen.")
     except Exception as exc:
         st.warning("Live-Schlagzeilen sind gerade nicht erreichbar. Der Globus mit den festen Beobachtungspunkten bleibt verfügbar.")
-        st.caption(f"Technischer Hinweis: {type(exc).__name__}")
+        st.caption(f"Technischer Hinweis: {str(exc)[:400]}")
     st.caption(f"Zuletzt in der App geladen: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC · Nachrichten-Cache: 15 Minuten")
 
 elif page == "Übersicht":
