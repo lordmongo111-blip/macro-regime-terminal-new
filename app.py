@@ -824,6 +824,60 @@ elif page in ("FX Signal", "FX Macro"):
                 st.caption("Heuristik: Zinsdifferenz 65%, Inflationsdifferenz 35%. Ein positiver Wert begünstigt die Basiswährung relativ zur Quote-Währung; kein alleiniger Trade-Trigger.")
             else:
                 st.warning("Makro-Score nicht verfügbar: " + str(macro_error) + ". Prüfe FRED-Key und Serienverfügbarkeit.")
+
+            # Expanded macro detail panel. FRED has a deep, consistent set of US
+            # series; for non-US currencies we do not pretend US data represents
+            # the other economy. Cross-country series require source-specific mapping.
+            st.markdown("#### Erweiterte Makrodetails")
+            st.caption("Zusatzindikatoren aus FRED. US-Reihen werden nur als US-Makro ausgewiesen; sie ersetzen keine gleichwertigen Daten der Gegenwährung.")
+            if not fred_key:
+                st.info("Für die erweiterten Makrodetails bitte einen FRED-API-Key links in der Seitenleiste eintragen. Der Schlüssel wird nicht in diesem Code gespeichert.")
+            elif "USD" not in (pair_info["base"], pair_info["quote"]):
+                st.info("Für dieses Paar ist USD nicht enthalten. Der bestehende relative Zins-/Inflationsvergleich bleibt verfügbar; zusätzliche Arbeitsmarkt-, Renditekurven- und Wachstumsreihen für beide Länder benötigen separate, passend zugeordnete Datenquellen. Es werden keine US-Werte als Ersatz angezeigt.")
+            else:
+                _usd_macro_specs = [
+                    ("US 2Y Treasury", "DGS2", "Rendite %", 10),
+                    ("US 10Y Treasury", "DGS10", "Rendite %", 10),
+                    ("US 10Y–2Y Zinskurve", "T10Y2Y", "Prozentpunkte", 10),
+                    ("US Arbeitslosenquote", "UNRATE", "%", 75),
+                    ("US Beschäftigung (Payrolls)", "PAYEMS", "Tausend Personen", 75),
+                    ("US Core CPI Index", "CPILFESL", "Index", 75),
+                    ("US reales BIP-Wachstum (annualisiert)", "A191RL1Q225SBEA", "%", 150),
+                    ("US Finanzierungszins (Fed Funds)", "FEDFUNDS", "%", 75),
+                ]
+                _usd_rows = []
+                _usd_errors = []
+                for _label, _sid, _unit, _max_age in _usd_macro_specs:
+                    try:
+                        _series = get_fred_series(_sid, fred_key)
+                        if _series.empty:
+                            raise ValueError("keine Beobachtungen")
+                        _series = _series.sort_values("date").reset_index(drop=True)
+                        _last = _series.iloc[-1]
+                        _age = (pd.Timestamp.now().normalize() - pd.Timestamp(_last["date"]).normalize()).days
+                        if _age < 0 or _age > _max_age:
+                            raise ValueError(f"letzter Wert {_last['date'].date()} ist {_age} Tage alt (Grenze {_max_age})")
+                        _previous = _series.iloc[-2]["value"] if len(_series) > 1 else np.nan
+                        _change = float(_last["value"] - _previous) if pd.notna(_previous) else np.nan
+                        _usd_rows.append({
+                            "US-Makrofaktor": _label, "FRED-Reihe": _sid,
+                            "Letzter Wert": round(float(_last["value"]), 3), "Einheit": _unit,
+                            "Änderung ggü. Vorwert": round(_change, 3) if np.isfinite(_change) else None,
+                            "Beobachtungsdatum": pd.Timestamp(_last["date"]).date().isoformat(),
+                            "Alter (Tage)": int(_age), "Status": "OK"
+                        })
+                    except Exception as _macro_detail_exc:
+                        _usd_errors.append(f"{_label} ({_sid}): {_macro_detail_exc}")
+                        _usd_rows.append({"US-Makrofaktor": _label, "FRED-Reihe": _sid,
+                                          "Letzter Wert": None, "Einheit": _unit,
+                                          "Änderung ggü. Vorwert": None, "Beobachtungsdatum": "—",
+                                          "Alter (Tage)": None, "Status": "FEHLT/VERALTET"})
+                st.dataframe(pd.DataFrame(_usd_rows), use_container_width=True, hide_index=True)
+                st.caption("Die Änderung ist die Differenz zur unmittelbar vorherigen verfügbaren Beobachtung; bei monatlichen/vierteljährlichen Reihen ist sie daher nicht täglich. Einzelne Reihen können bei Feiertagen oder Veröffentlichungsverzögerungen als veraltet markiert werden.")
+                if _usd_errors:
+                    with st.expander(f"Details zu fehlenden/veralteten US-Reihen ({len(_usd_errors)})"):
+                        for _err in _usd_errors:
+                            st.write("- " + _err)
             quality_rows = [
                 {"Komponente": "FX-Kursdaten", "Status": "VALIDIERT" if price_ok else "UNGÜLTIG", "Einordnung": price_message},
                 {"Komponente": "Relatives Makro beider Währungen", "Status": "VALIDIERT" if component_valid["macro"] else "FEHLT", "Einordnung": macro_result["details"] if macro_result is not None else str(macro_error)},
