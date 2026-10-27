@@ -1,4 +1,7 @@
 import os
+import json
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 
 import numpy as np
@@ -484,7 +487,7 @@ st.warning("Datenstatus: Ohne konfigurierte Datenquelle werden keine aktuellen M
 with st.sidebar:
     st.markdown('<div class="brand"><div class="logo"><span>◇</span></div><div><div class="brand-title" style="font-size:16px">MACRO / REGIME</div><div class="brand-sub" style="font-size:10px">FX · Makro · COT · Quant</div></div></div>', unsafe_allow_html=True)
     st.header("Einstellungen")
-    page = st.radio("Modul", ["Übersicht", "FX Signal", "Index Signal", "ML Lab", "Index ML Lab", "Saisonalität", "COT / Positioning", "NQ & ES", "Index Macro & Seasonality", "Quant & Regression", "Datenquellen"])
+    page = st.radio("Modul", ["Übersicht", "Global Event Map", "FX Signal", "Index Signal", "ML Lab", "Index ML Lab", "Saisonalität", "COT / Positioning", "NQ & ES", "Index Macro & Seasonality", "Quant & Regression", "Datenquellen"])
     st.divider()
     try:
         saved_fred_key = st.secrets.get("FRED_API_KEY", "")
@@ -504,7 +507,85 @@ demo_strength = pd.DataFrame({
 })
 demo_strength["Status"] = "DEMO"
 
-if page == "Übersicht":
+if page == "Global Event Map":
+    st.title("Global Event Map")
+    st.caption("Interaktiver 3D-Globus für Finanzmarkt-Risiken · Live-Schlagzeilen werden separat von den festen Risiko-Orten ausgewiesen.")
+
+    events = pd.DataFrame([
+        {"Ort":"Federal Reserve · Washington", "Lat":38.9072,"Lon":-77.0369,"Kategorie":"Zentralbank","Märkte":"USD · US-Renditen · Gold · Aktien","Warum wichtig":"Fed-Kommunikation und US-Zinsausblick können den US-Dollar und globale Finanzierungskosten bewegen.","Risiko":5},
+        {"Ort":"EZB · Frankfurt", "Lat":50.1109,"Lon":8.6821,"Kategorie":"Zentralbank","Märkte":"EUR · Bund-Renditen · Euro-Aktien","Warum wichtig":"EZB-Zinsentscheidungen und Inflationsausblick prägen EUR-Zinsen und EUR-Wechselkurse.","Risiko":5},
+        {"Ort":"Bank of Japan · Tokio", "Lat":35.6762,"Lon":139.6503,"Kategorie":"Zentralbank","Märkte":"JPY · Nikkei · globale Carry Trades","Warum wichtig":"Änderungen der japanischen Geldpolitik können Yen-Carry-Trades und globale Risikoanlagen bewegen.","Risiko":4},
+        {"Ort":"Bank of England · London", "Lat":51.5072,"Lon":-0.1276,"Kategorie":"Zentralbank","Märkte":"GBP · Gilts","Warum wichtig":"BoE-Zinsausblick, Inflation und Lohnwachstum sind zentrale Treiber für das Pfund.","Risiko":4},
+        {"Ort":"Strait of Hormuz", "Lat":26.5667,"Lon":56.25,"Kategorie":"Energie / Geopolitik","Märkte":"Brent · WTI · Inflation · CAD","Warum wichtig":"Störungen einer zentralen Öltransportroute können Energiepreise und Inflationserwartungen erhöhen.","Risiko":5},
+        {"Ort":"Suezkanal", "Lat":30.5,"Lon":32.3,"Kategorie":"Handelsroute","Märkte":"Frachtkosten · Öl · europäische Industrie","Warum wichtig":"Umleitungen und Verzögerungen können Lieferketten, Transportkosten und einzelne Branchen beeinflussen.","Risiko":4},
+        {"Ort":"Bab al-Mandab", "Lat":12.58,"Lon":43.33,"Kategorie":"Handelsroute / Geopolitik","Märkte":"Fracht · Energie · Risikoaversion","Warum wichtig":"Sicherheitsrisiken am Roten Meer können Schifffahrt und Lieferketten beeinträchtigen.","Risiko":4},
+        {"Ort":"Taiwanstraße", "Lat":24.0,"Lon":119.5,"Kategorie":"Geopolitik / Technologie","Märkte":"Halbleiter · Nasdaq · Lieferketten","Warum wichtig":"Spannungen oder Produktionsunterbrechungen könnten globale Chip-Lieferketten und Technologieaktien treffen.","Risiko":5},
+        {"Ort":"Peking", "Lat":39.9042,"Lon":116.4074,"Kategorie":"Wachstum / Politik","Märkte":"CNY · Industriemetalle · Luxus · Aktien","Warum wichtig":"Chinesische Wachstumsdaten, Stimuli und Handelspolitik wirken auf globale Nachfrage und Rohstoffe.","Risiko":4},
+        {"Ort":"OPEC · Wien", "Lat":48.2082,"Lon":16.3738,"Kategorie":"Energie","Märkte":"Brent · WTI · CAD · Inflation","Warum wichtig":"Förderentscheidungen und Signale großer Produzenten können das Ölangebot und Energiepreise verändern.","Risiko":3},
+        {"Ort":"New York · US-Märkte", "Lat":40.7128,"Lon":-74.0060,"Kategorie":"Finanzzentrum","Märkte":"S&P 500 · Nasdaq · Treasury · DXY","Warum wichtig":"US-Konjunkturdaten, Treasury-Auktionen und große Marktbewegungen strahlen global aus.","Risiko":4},
+        {"Ort":"Genf · Welthandel", "Lat":46.2044,"Lon":6.1432,"Kategorie":"Handelspolitik","Märkte":"EUR · CHF · Industrie · Rohstoffe","Warum wichtig":"Zölle, Sanktionen und Handelsregeln können Erwartungen für Handel und Unternehmensgewinne verändern.","Risiko":3},
+    ])
+    left, right = st.columns([1.8, 1])
+    with left:
+        st.markdown("### Globus und globale Risikopunkte")
+        st.caption("Mit Maus ziehen, um den Globus zu drehen; scrollen zum Zoomen. Die Marker sind kuratierte Beobachtungspunkte, keine Behauptung, dass dort gerade ein neues Ereignis stattfindet.")
+        fig = go.Figure()
+        fig.add_trace(go.Scattergeo(
+            lat=events["Lat"], lon=events["Lon"], text=events["Ort"],
+            customdata=events[["Kategorie","Märkte","Warum wichtig","Risiko"]].values,
+            mode="markers+text", textposition="top center", textfont={"color":"#b8d8e8","size":9},
+            marker={"size":events["Risiko"]*3+4,"color":events["Risiko"],"colorscale":[[0,"#38bdf8"],[0.55,"#2dd4bf"],[1,"#fb923c"]],"cmin":1,"cmax":5,"line":{"color":"#06111c","width":1.5},"opacity":0.9},
+            hovertemplate="<b>%{text}</b><br>Kategorie: %{customdata[0]}<br>Märkte: %{customdata[1]}<br>Marktrelevanz: %{customdata[2]}<extra></extra>"
+        ))
+        fig.update_layout(
+            height=610, margin={"l":0,"r":0,"t":10,"b":0}, paper_bgcolor="#07101a", plot_bgcolor="#07101a",
+            font={"color":"#d8e6f3"}, showlegend=False,
+            geo={"projection":{"type":"orthographic","rotation":{"lon":10,"lat":15,"roll":0}},"showland":True,"landcolor":"#174b3c","showocean":True,"oceancolor":"#08264a","showlakes":True,"lakecolor":"#08264a","showcoastlines":True,"coastlinecolor":"#4b8490","showcountries":True,"countrycolor":"#426b66","bgcolor":"#07101a","showframe":False,"resolution":50}
+        )
+        st.plotly_chart(fig, use_container_width=True, config={"scrollZoom":True,"displaylogo":False})
+    with right:
+        st.markdown("### Ereignis-Explorer")
+        chosen = st.selectbox("Beobachtungspunkt", events["Ort"].tolist())
+        row = events.loc[events["Ort"] == chosen].iloc[0]
+        st.metric("Beobachtungs-Priorität", f"{int(row['Risiko'])}/5", help="Redaktionelle Priorisierung der strukturellen Marktrelevanz, kein gemessener Live-Risikowert.")
+        st.markdown(f"**Kategorie:** {row['Kategorie']}")
+        st.markdown(f"**Betroffene Märkte:** {row['Märkte']}")
+        st.write(row["Warum wichtig"])
+        st.info("Die Punkte zeigen wichtige Markt-Knoten und Risikozonen. Sie sind keine Kauf-/Verkaufssignale.")
+
+    st.markdown("---")
+    st.markdown("### Aktuelle Finanz- und Geopolitik-Schlagzeilen")
+    st.caption("Nachrichten werden über die öffentliche GDELT-Artikel-Suche geladen. Die Zuordnung zu Märkten ist eine Research-Hilfe; Überschriften und Veröffentlichungszeiten bitte beim Original prüfen.")
+    @st.cache_data(ttl=900, show_spinner=False)
+    def load_global_headlines():
+        query = '(central bank OR inflation OR tariffs OR sanctions OR oil OR Strait of Hormuz OR Federal Reserve OR ECB OR Bank of Japan OR Taiwan)'
+        params = urllib.parse.urlencode({"query": query, "mode":"ArtList", "format":"json", "maxrecords":"18", "sort":"DateDesc", "timespan":"3d"})
+        url = "https://api.gdeltproject.org/api/v2/doc/doc?" + params
+        req = urllib.request.Request(url, headers={"User-Agent":"MacroRegimeTerminal/1.0"})
+        with urllib.request.urlopen(req, timeout=7) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+        rows = []
+        for item in payload.get("articles", []):
+            title = item.get("title")
+            link = item.get("url")
+            if title and link:
+                rows.append({"Zeit (UTC)":item.get("seendate", ""),"Schlagzeile":title,"Quelle":item.get("domain", "Quelle"),"Link":link})
+        return rows
+    try:
+        with st.spinner("Lade aktuelle Schlagzeilen …"):
+            headlines = load_global_headlines()
+        if headlines:
+            for item in headlines:
+                st.markdown(f"**{item['Schlagzeile']}**  \n<small>{item['Quelle']} · {item['Zeit (UTC)']} UTC · [Original öffnen]({item['Link']})</small>", unsafe_allow_html=True)
+                st.divider()
+        else:
+            st.warning("Die Nachrichtenquelle hat aktuell keine passenden Artikel geliefert. Bitte später erneut versuchen.")
+    except Exception as exc:
+        st.warning("Live-Schlagzeilen sind gerade nicht erreichbar. Der Globus mit den festen Beobachtungspunkten bleibt verfügbar.")
+        st.caption(f"Technischer Hinweis: {type(exc).__name__}")
+    st.caption(f"Zuletzt in der App geladen: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC · Nachrichten-Cache: 15 Minuten")
+
+elif page == "Übersicht":
     # Reference-style FX ticker strip. It only displays values from the last manual refresh;
     # it never triggers a hidden market-data request on page load.
     ticker_pairs = [("EUR/USD", "EUR/USD"), ("GBP/USD", "GBP/USD"), ("USD/JPY", "USD/JPY"),
