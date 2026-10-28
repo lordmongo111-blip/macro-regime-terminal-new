@@ -1769,9 +1769,12 @@ elif page == "Saisonalität":
                                         name="Startniveau 100", hoverinfo="skip"
                                     ))
                                     fig.add_trace(go.Scatter(
-                                        x=chart_x, y=chart_y, mode="lines",
+                                        x=chart_x, y=chart_y, mode="lines+markers",
                                         name="Durchschnitt aller Jahre",
                                         line=dict(color="#36b9cf", width=3, shape="linear"),
+                                        # Nearly transparent markers keep the line visually clean but make
+                                        # individual seasonal points selectable by Streamlit's box select.
+                                        marker=dict(size=7, color="#36b9cf", opacity=0.01, line=dict(width=0)),
                                         fill="tonexty", fillcolor="rgba(54,185,207,0.18)",
                                         customdata=seasonal[["count", "mean"]],
                                         hovertemplate="%{x|%d. %b}<br>Durchschnittsindex: %{y:.2f}<br>Berücksichtigte Jahre: %{customdata[0]}<br>Ungeglätteter Durchschnitt: %{customdata[1]:.2f}<extra></extra>"
