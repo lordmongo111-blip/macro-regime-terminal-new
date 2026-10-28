@@ -1662,7 +1662,8 @@ elif page == "Saisonalität":
     with c8:
         end_day = st.number_input("Endtag", min_value=1, max_value=31, value=16, key="season_end_day")
 
-    if st.button("Historische Daten laden / aktualisieren", type="primary", key="run_seasonality_plus"):
+    # Chart und Saisonalitätsauswertung automatisch beim Öffnen laden; kein Start-Button nötig.
+    if True:
         with st.spinner("Lade echte historische Kurse und berechne saisonalen Jahresverlauf…"):
             try:
                 prices = load_market_history(symbols[label], years)
@@ -1933,8 +1934,6 @@ elif page == "Saisonalität":
                                     st.caption("Methodik: jedes Jahr wird auf 100 am ersten verfügbaren Handelstag normiert. Die Saisonalitätslinie ist der Durchschnitt dieser normierten Jahresverläufe. Rendite und Gewinnrate werden über die einzelnen historischen Jahresfenster berechnet, nicht über alle überlappenden Tagesstarts.")
             except Exception as e:
                 st.error(f"Seasonality-Berechnung fehlgeschlagen: {e}")
-    else:
-        st.info("Wähle Instrument, Historie, Saisonfenster und Kostenannahme und lade dann die echten historischen Kursdaten. Es werden nur echte historische Kurse verwendet; fehlende Werte werden nicht durch Demo-Daten ersetzt.")
 
 elif page == "COT / Positioning":
     st.subheader("COT / Positioning")
