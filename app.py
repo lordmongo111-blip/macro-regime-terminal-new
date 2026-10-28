@@ -1797,6 +1797,7 @@ elif page == "Saisonalität":
                                     )
                                     st.caption("Die türkisfarbene Linie zeigt den geglätteten Durchschnitt der historischen Jahresverläufe; die Fläche darunter erleichtert das Erkennen der Richtung. Index 100 ist das neutrale Startniveau. Das ist saisonale Historie, keine Garantie für die aktuelle Kursrichtung.")
 
+                                    selection_active = False
                                     # If the user box-selects points on the average curve, compute historical
                                     # returns for the corresponding calendar window across all available years.
                                     selected_points = []
@@ -1835,6 +1836,23 @@ elif page == "Saisonalität":
                                             window_rows.append({"Jahr": int(hist_year), "Start": start_row["date"], "Ende": end_row["date"], "Rendite": ret})
                                         if window_rows:
                                             selected_result = pd.DataFrame(window_rows)
+                                            # Make the whole lower analysis panel follow the selected chart range.
+                                            selection_active = True
+                                            result = selected_result.rename(columns={"Rendite": "Netto-Rendite"}).copy()
+                                            result["Gewinn"] = result["Netto-Rendite"] > 0
+                                            win_rate = float(result["Gewinn"].mean())
+                                            avg_ret = float(result["Netto-Rendite"].mean())
+                                            median_ret = float(result["Netto-Rendite"].median())
+                                            avg_abs_move = float(result["Netto-Rendite"].abs().mean())
+                                            avg_win = result.loc[result["Netto-Rendite"] > 0, "Netto-Rendite"].mean()
+                                            avg_loss = result.loc[result["Netto-Rendite"] <= 0, "Netto-Rendite"].mean()
+                                            gp = result.loc[result["Netto-Rendite"] > 0, "Netto-Rendite"].sum()
+                                            gl = -result.loc[result["Netto-Rendite"] <= 0, "Netto-Rendite"].sum()
+                                            pf = gp / gl if gl > 0 else np.nan
+                                            n = len(result)
+                                            # Annualization for a selected calendar interval is only a mathematical extrapolation.
+                                            selected_days = max(1, int((selected_end - selected_start).days))
+                                            annualized = ((1 + avg_ret) ** (365 / selected_days) - 1) if avg_ret > -1 else np.nan
                                             selected_win_rate = float((selected_result["Rendite"] > 0).mean())
                                             selected_avg_return = float(selected_result["Rendite"].mean())
                                             selected_median_return = float(selected_result["Rendite"].median())
@@ -1864,7 +1882,10 @@ elif page == "Saisonalität":
                                     m2.metric("Ø absolute Bewegung", f"{avg_abs_move:.2%}")
                                     m3.metric("Ø Gewinn / Verlust", f"{'—' if pd.isna(avg_win) else f'{avg_win:.2%}'} / {'—' if pd.isna(avg_loss) else f'{avg_loss:.2%}'}")
                                     m4.metric("Profit Factor", "—" if pd.isna(pf) else f"{pf:.2f}")
-                                    st.caption(f"Fenster: {month_names[int(start_month)]} {int(start_day)} – {month_names[int(end_month)]} {int(end_day)} · Kosten: {cost_bps:.1f} bps Round-trip. *Annualisierte Rendite ist eine rechnerische Extrapolation, keine Prognose.")
+                                    if selection_active:
+                                        st.caption(f"Ausgewählter Chartbereich: {selected_start.strftime('%d. %b')} – {selected_end.strftime('%d. %b')} · {n} historische Jahresbeobachtungen · Kosten: {cost_bps:.1f} bps Round-trip. *Annualisierte Rendite ist eine rechnerische Extrapolation, keine Prognose.")
+                                    else:
+                                        st.caption(f"Fenster: {month_names[int(start_month)]} {int(start_day)} – {month_names[int(end_month)]} {int(end_day)} · Kosten: {cost_bps:.1f} bps Round-trip. *Annualisierte Rendite ist eine rechnerische Extrapolation, keine Prognose.")
                                     left, right = st.columns([1.2, 1])
                                     with left:
                                         yr_fig = px.bar(result, x="Jahr", y="Netto-Rendite", color="Netto-Rendite", color_continuous_scale=["#e05260", "#263f52", "#4bb5cc"], title="Saisonfenster — Rendite je Jahr")
