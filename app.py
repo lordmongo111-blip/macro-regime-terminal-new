@@ -2180,7 +2180,16 @@ elif page in ("Index Macro & Seasonality", "Index Signal"):
                 ).reindex(range(1, 13))
                 seasonal.index = [MONTHS[m-1] for m in seasonal.index]
                 fig_season = go.Figure()
-                fig_season.add_trace(go.Bar(x=seasonal.index, y=seasonal["avg_return"] * 100, name="Ø Monatsrendite (%)"))
+                fig_season.add_trace(go.Bar(
+                    x=seasonal.index,
+                    y=seasonal["avg_return"] * 100,
+                    name="Ø Monatsrendite (%)",
+                    marker_color=[
+                        "#ef5350" if pd.notna(value) and value < 0 else "#81c8ff"
+                        for value in seasonal["avg_return"]
+                    ],
+                    hovertemplate="%{x}<br>Ø Monatsrendite: %{y:.2f}%<extra></extra>"
+                ))
                 fig_season.add_trace(go.Scatter(x=seasonal.index, y=seasonal["win_rate"] * 100, mode="lines+markers", name="Historische Gewinnquote (%)", yaxis="y2"))
                 fig_season.update_layout(title=f"{selected_index} — Kalender-Monats-Saisonalität", xaxis_title="Kalendermonat", yaxis_title="Ø Monatsrendite (%)", yaxis2=dict(title="Gewinnquote (%)", overlaying="y", side="right", range=[0, 100]), hovermode="x unified")
                 st.plotly_chart(fig_season, use_container_width=True)
