@@ -1743,74 +1743,29 @@ elif page == "Saisonalität":
                                     annualized = ((1 + avg_ret) ** (252 / max(1, int(horizon))) - 1) if avg_ret > -1 else np.nan
 
                                     st.caption(f"Quelle: load_market_history · Symbol {symbols[label]} · {d.index.min().date()} bis {d.index.max().date()} · {len(d):,} valide Kurse · {n} auswertbare Kalenderjahre.")
-                                    # Seasonality chart: emphasize the average path and make bullish/bearish periods obvious.
-                                    seasonal["mean_smooth"] = seasonal["mean"].rolling(window=9, center=True, min_periods=1).mean()
+                                    # Single seasonal average curve: average normalized daily path across all available years.
+                                    seasonal["mean_smooth"] = seasonal["mean"].rolling(window=5, center=True, min_periods=1).mean()
                                     seasonal = seasonal.sort_values("date").copy()
                                     chart_x = seasonal["date"]
                                     chart_y = seasonal["mean_smooth"]
-                                    bullish_y = chart_y.where(chart_y >= 100)
-                                    bearish_y = chart_y.where(chart_y < 100)
                                     fig = go.Figure()
 
-                                    # Keep historical years available as a faint visual backdrop, but reduce clutter.
-                                    year_groups = list(paths.groupby("year"))
-                                    if len(year_groups) > 10:
-                                        year_groups = year_groups[-10:]
-                                    for yr, yr_path in year_groups:
-                                        yr_path = yr_path.copy()
-                                        yr_path["chart_date"] = pd.to_datetime("2000-" + yr_path["month_day"], errors="coerce")
-                                        yr_path = yr_path.dropna(subset=["chart_date"]).sort_values("chart_date")
-                                        fig.add_trace(go.Scatter(
-                                            x=yr_path["chart_date"], y=yr_path["index100"], mode="lines",
-                                            name=str(yr), line=dict(color="rgba(125,160,180,0.15)", width=0.8),
-                                            hovertemplate=f"Jahr {yr}<br>%{{x|%d. %b}}<br>Index: %{{y:.2f}}<extra></extra>",
-                                            showlegend=False
-                                        ))
-
-                                    # Baseline traces let the shaded area follow the neutral index of 100, not zero.
+                                    # One continuous average line with a light fill to neutral index 100.
                                     fig.add_trace(go.Scatter(
                                         x=chart_x, y=[100] * len(chart_x), mode="lines",
-                                        line=dict(width=0), hoverinfo="skip", showlegend=False
+                                        line=dict(color="rgba(148,163,184,0.55)", width=1, dash="dash"),
+                                        name="Startniveau 100", hoverinfo="skip"
                                     ))
                                     fig.add_trace(go.Scatter(
-                                        x=chart_x, y=bullish_y, mode="lines", connectgaps=False,
-                                        name="Bullish (über 100)", line=dict(color="#27c98a", width=3.8),
-                                        fill="tonexty", fillcolor="rgba(39,201,138,0.16)",
+                                        x=chart_x, y=chart_y, mode="lines",
+                                        name="Durchschnitt aller Jahre",
+                                        line=dict(color="#36b9cf", width=3, shape="linear"),
+                                        fill="tonexty", fillcolor="rgba(54,185,207,0.18)",
                                         customdata=seasonal[["count", "mean"]],
-                                        hovertemplate="%{x|%d. %b}<br>Index: %{y:.2f}<br>Historische Jahre: %{customdata[0]}<br>Rohmittel: %{customdata[1]:.2f}<extra></extra>"
+                                        hovertemplate="%{x|%d. %b}<br>Durchschnittsindex: %{y:.2f}<br>Berücksichtigte Jahre: %{customdata[0]}<br>Ungeglätteter Durchschnitt: %{customdata[1]:.2f}<extra></extra>"
                                     ))
-                                    fig.add_trace(go.Scatter(
-                                        x=chart_x, y=[100] * len(chart_x), mode="lines",
-                                        line=dict(width=0), hoverinfo="skip", showlegend=False
-                                    ))
-                                    fig.add_trace(go.Scatter(
-                                        x=chart_x, y=bearish_y, mode="lines", connectgaps=False,
-                                        name="Bearish (unter 100)", line=dict(color="#ff6b6b", width=3.8),
-                                        fill="tonexty", fillcolor="rgba(255,107,107,0.16)",
-                                        customdata=seasonal[["count", "mean"]],
-                                        hovertemplate="%{x|%d. %b}<br>Index: %{y:.2f}<br>Historische Jahre: %{customdata[0]}<br>Rohmittel: %{customdata[1]:.2f}<extra></extra>"
-                                    ))
-                                    # Reference line makes the normalized 100 starting level easy to read.
-                                    fig.add_hline(y=100, line_width=1, line_dash="dash", line_color="rgba(226,232,240,0.55)",
-                                                  annotation_text="Startniveau 100", annotation_position="bottom right",
-                                                  annotation_font_color="#cbd5e1")
-                                    if start_key <= end_key:
-                                        x0 = pd.to_datetime("2000-" + start_key, errors="coerce")
-                                        x1 = pd.to_datetime("2000-" + end_key, errors="coerce")
-                                    else:
-                                        # Cross-year windows are displayed as two highlighted segments.
-                                        x0 = pd.to_datetime("2000-" + start_key, errors="coerce")
-                                        x1 = pd.to_datetime("2000-12-31", errors="coerce")
-                                        x2 = pd.to_datetime("2000-01-01", errors="coerce")
-                                        x3 = pd.to_datetime("2000-" + end_key, errors="coerce")
-                                        if pd.notna(x2) and pd.notna(x3):
-                                            fig.add_vrect(x0=x2, x1=x3, fillcolor="#42c5df", opacity=0.10, line_width=0, layer="below")
-                                    if pd.notna(x0) and pd.notna(x1):
-                                        fig.add_vrect(x0=x0, x1=x1, fillcolor="#42c5df", opacity=0.13, line_width=0, layer="below")
-                                        fig.add_vline(x=x0, line_width=1.3, line_color="#b8f3ff", line_dash="dot")
-                                        fig.add_vline(x=x1, line_width=1.3, line_color="#b8f3ff", line_dash="dot")
                                     fig.update_layout(
-                                        title=dict(text="SAISONALER BIAS · Bullish vs. Bearish", x=0.015, xanchor="left", font=dict(size=16)),
+                                        title=dict(text="SAISONALITÄT · Durchschnittlicher Jahresverlauf", x=0.015, xanchor="left", font=dict(size=16)),
                                         xaxis_title="Monat", yaxis_title="Normierter Kursindex (Start = 100)",
                                         hovermode="x unified", height=470,
                                         margin=dict(l=35, r=20, t=58, b=35), plot_bgcolor="#0b1118", paper_bgcolor="#0b1118",
@@ -1819,9 +1774,9 @@ elif page == "Saisonalität":
                                         hoverlabel=dict(bgcolor="#111b26", bordercolor="#42c5df", font_color="#f1f5f9")
                                     )
                                     fig.update_xaxes(tickformat="%b", dtick="M1", showgrid=True, gridcolor="rgba(148,163,184,0.13)", zeroline=False, tickfont=dict(color="#9ca3af"))
-                                    fig.update_yaxes(showgrid=True, gridcolor="rgba(148,163,184,0.13)", zeroline=False, tickfont=dict(color="#9ca3af"), fixedrange=False, autorange=True)
+                                    fig.update_yaxes(showgrid=True, gridcolor="rgba(148,163,184,0.18)", zeroline=False, tickfont=dict(color="#9ca3af"), fixedrange=False, autorange=True)
                                     st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
-                                    st.caption("Grün = saisonaler Durchschnitt über dem Startniveau 100 (bullish); Rot = darunter (bearish). Die dünnen Linien zeigen die letzten bis zu 10 historischen Jahresverläufe. Das Startniveau 100 ist neutral; Saisonalität allein ist keine aktuelle Handelssignal-Bestätigung.")
+                                    st.caption("Die türkisfarbene Linie zeigt den geglätteten Durchschnitt der historischen Jahresverläufe; die Fläche darunter erleichtert das Erkennen der Richtung. Index 100 ist das neutrale Startniveau. Das ist saisonale Historie, keine Garantie für die aktuelle Kursrichtung.")
                                     st.markdown("#### Ergebnis für den ausgewählten Saisonbereich")
                                     m1, m2, m3, m4 = st.columns(4)
                                     m1.metric("Annualisierte Rendite*", "—" if pd.isna(annualized) else f"{annualized:.2%}")
