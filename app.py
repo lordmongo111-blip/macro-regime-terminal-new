@@ -1628,11 +1628,22 @@ elif page == "Index ML Lab":
 
 elif page == "Saisonalität":
     st.subheader("Seasonality Terminal")
-    st.caption("Saisonaler Jahresverlauf aus historischen Kursen: jedes Kalenderjahr wird auf 100 am Jahresanfang normiert. Kennzahlen beziehen sich auf das ausgewählte Kalenderfenster und vergleichen dieselben Daten im jeweiligen historischen Jahr.")
-    symbols = {name: info["symbol"] for name, info in FX_PAIRS.items()}
+    st.caption("Forex und Indizes: jedes historische Kalenderjahr wird auf 100 normiert; die türkisfarbene Linie zeigt den durchschnittlichen saisonalen Verlauf über alle verfügbaren Jahre. Kennzahlen beziehen sich auf das ausgewählte Kalenderfenster.")
+    # One common seasonality view for FX pairs and index proxies.
+    symbols = {f"Forex · {name}": info["symbol"] for name, info in FX_PAIRS.items()}
+    symbols.update({
+        "Index · EURO STOXX 50": "^STOXX50E",
+        "Index · DAX / Germany 40": "^GDAXI",
+        "Index · Hang Seng": "^HSI",
+        "Index · Nikkei 225": "^N225",
+        "Index · Nasdaq-100": "^NDX",
+        "Index · FTSE 100": "^FTSE",
+        "Index · Dow Jones": "^DJI",
+        "Index · S&P 500": "^GSPC",
+    })
     c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
     with c1:
-        label = st.selectbox("Instrument / Proxy", list(symbols), key="seasonality_symbol")
+        label = st.selectbox("Forex-Paar oder Index", list(symbols), key="seasonality_symbol")
     with c2:
         years = st.selectbox("Historie", ["5y", "10y", "max"], index=1, key="seasonality_years")
     with c3:
@@ -2107,6 +2118,55 @@ elif page in ("Index Macro & Seasonality", "Index Signal"):
                 fig.add_trace(go.Scatter(x=prices["date"], y=close.rolling(200).mean().values, mode="lines", name="SMA 200"))
                 fig.update_layout(title=f"{selected_index} — Kurs & Trend (Proxy)", xaxis_title="Datum", yaxis_title="Indexpunkte", hovermode="x unified")
                 st.plotly_chart(fig, use_container_width=True)
+
+                # Average normalized calendar-year path, calculated from all available historical years.
+                yearly_paths = []
+                season_close = close.resample("B").last().dropna()
+                for year, year_close in season_close.groupby(season_close.index.year):
+                    year_close = year_close.sort_index()
+                    if len(year_close) < 40:
+                        continue
+                    normalized = year_close / year_close.iloc[0] * 100.0
+                    year_path = pd.DataFrame({"date": year_close.index, "index100": normalized.values})
+                    year_path["month_day"] = year_path["date"].dt.strftime("%m-%d")
+                    year_path["year"] = year
+                    yearly_paths.append(year_path)
+                if yearly_paths:
+                    paths_all = pd.concat(yearly_paths, ignore_index=True)
+                    avg_path = paths_all.groupby("month_day", sort=True)["index100"].agg(["mean", "count"]).reset_index()
+                    avg_path["date"] = pd.to_datetime("2000-" + avg_path["month_day"], errors="coerce")
+                    avg_path = avg_path.dropna(subset=["date"]).sort_values("date")
+                    avg_path["smooth"] = avg_path["mean"].rolling(window=5, center=True, min_periods=1).mean()
+                    avg_x = avg_path["date"]
+                    avg_y = avg_path["smooth"]
+                    fig_avg = go.Figure()
+                    fig_avg.add_trace(go.Scatter(
+                        x=avg_x, y=[100] * len(avg_x), mode="lines",
+                        line=dict(color="rgba(148,163,184,0.55)", width=1, dash="dash"),
+                        name="Startniveau 100", hoverinfo="skip"
+                    ))
+                    fig_avg.add_trace(go.Scatter(
+                        x=avg_x, y=avg_y, mode="lines",
+                        name="Durchschnitt aller Jahre",
+                        line=dict(color="#36b9cf", width=3),
+                        fill="tonexty", fillcolor="rgba(54,185,207,0.18)",
+                        customdata=avg_path[["count", "mean"]],
+                        hovertemplate="%{x|%d. %b}<br>Durchschnittsindex: %{y:.2f}<br>Historische Jahreswerte: %{customdata[0]}<br>Ungeglätteter Durchschnitt: %{customdata[1]:.2f}<extra></extra>"
+                    ))
+                    fig_avg.update_layout(
+                        title=f"{selected_index} — Saisonaler Durchschnitt aller Jahre",
+                        xaxis_title="Kalendermonat", yaxis_title="Normierter Kursindex (Start = 100)",
+                        hovermode="x unified", height=430,
+                        margin=dict(l=35, r=20, t=55, b=35),
+                        plot_bgcolor="#0b1118", paper_bgcolor="#0b1118",
+                        font=dict(color="#cbd5e1", size=11),
+                        legend=dict(orientation="h", y=1.02, x=0.01)
+                    )
+                    fig_avg.update_xaxes(tickformat="%b", dtick="M1", showgrid=True, gridcolor="rgba(148,163,184,0.13)", zeroline=False)
+                    fig_avg.update_yaxes(showgrid=True, gridcolor="rgba(148,163,184,0.18)", zeroline=False, autorange=True)
+                    st.plotly_chart(fig_avg, use_container_width=True)
+                    st.caption(f"Durchschnittskurve aus {len(yearly_paths)} historischen Jahresverläufen; jedes Jahr startet normiert bei 100. Die Kurve zeigt Saisonalität, keine sichere Prognose.")
+
                 # Calendar-month seasonality: average return and empirical win rate by month.
                 monthly_close = close.resample("ME").last().dropna()
                 monthly_returns = monthly_close.pct_change().dropna()
