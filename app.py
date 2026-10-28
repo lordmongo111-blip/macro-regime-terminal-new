@@ -1786,8 +1786,72 @@ elif page == "Saisonalität":
                                     )
                                     fig.update_xaxes(tickformat="%b", dtick="M1", showgrid=True, gridcolor="rgba(148,163,184,0.13)", zeroline=False, tickfont=dict(color="#9ca3af"))
                                     fig.update_yaxes(showgrid=True, gridcolor="rgba(148,163,184,0.18)", zeroline=False, tickfont=dict(color="#9ca3af"), fixedrange=False, autorange=True)
-                                    st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
+                                    st.caption("Ziehe mit der Maus einen Bereich über die Durchschnittskurve, um ihn auszuwerten. Mit Doppelklick setzt du die Ansicht zurück.")
+                                    chart_event = st.plotly_chart(
+                                        fig, use_container_width=True,
+                                        config={"displaylogo": False, "scrollZoom": True},
+                                        key="seasonality_average_curve_select",
+                                        on_select="rerun",
+                                        selection_mode="box"
+                                    )
                                     st.caption("Die türkisfarbene Linie zeigt den geglätteten Durchschnitt der historischen Jahresverläufe; die Fläche darunter erleichtert das Erkennen der Richtung. Index 100 ist das neutrale Startniveau. Das ist saisonale Historie, keine Garantie für die aktuelle Kursrichtung.")
+
+                                    # If the user box-selects points on the average curve, compute historical
+                                    # returns for the corresponding calendar window across all available years.
+                                    selected_points = []
+                                    try:
+                                        selected_points = chart_event.selection.points
+                                    except Exception:
+                                        selected_points = []
+                                    selected_dates = []
+                                    for point in selected_points:
+                                        point_x = point.get("x")
+                                        if point_x:
+                                            parsed_x = pd.to_datetime(point_x, errors="coerce")
+                                            if pd.notna(parsed_x):
+                                                selected_dates.append(parsed_x)
+                                    if len(selected_dates) >= 2:
+                                        selected_start = min(selected_dates)
+                                        selected_end = max(selected_dates)
+                                        start_md = selected_start.strftime("%m-%d")
+                                        end_md = selected_end.strftime("%m-%d")
+                                        window_rows = []
+                                        history = close.dropna().sort_index()
+                                        history_frame = pd.DataFrame({"date": history.index, "close": history.values})
+                                        history_frame["year"] = history_frame["date"].dt.year
+                                        for hist_year, hist_group in history_frame.groupby("year"):
+                                            if hist_year == 2000:
+                                                continue
+                                            start_candidates = hist_group[hist_group["date"].dt.strftime("%m-%d") >= start_md]
+                                            end_candidates = hist_group[hist_group["date"].dt.strftime("%m-%d") <= end_md]
+                                            if start_candidates.empty or end_candidates.empty:
+                                                continue
+                                            start_row = start_candidates.iloc[0]
+                                            end_row = end_candidates.iloc[-1]
+                                            if end_row["date"] <= start_row["date"]:
+                                                continue
+                                            ret = float(end_row["close"] / start_row["close"] - 1.0 - float(cost_bps) / 10000.0)
+                                            window_rows.append({"Jahr": int(hist_year), "Start": start_row["date"], "Ende": end_row["date"], "Rendite": ret})
+                                        if window_rows:
+                                            selected_result = pd.DataFrame(window_rows)
+                                            selected_win_rate = float((selected_result["Rendite"] > 0).mean())
+                                            selected_avg_return = float(selected_result["Rendite"].mean())
+                                            selected_median_return = float(selected_result["Rendite"].median())
+                                            selected_short_rate = float((selected_result["Rendite"] < 0).mean())
+                                            st.markdown(f"#### Auswertung des markierten Bereichs: {selected_start.strftime('%d. %b')} – {selected_end.strftime('%d. %b')}")
+                                            sc1, sc2, sc3, sc4 = st.columns(4)
+                                            sc1.metric("Ø Rendite je Jahr", f"{selected_avg_return:.2%}")
+                                            sc2.metric("Historische Gewinnrate Long", f"{selected_win_rate:.1%}")
+                                            sc3.metric("Historische Trefferquote Short", f"{selected_short_rate:.1%}")
+                                            sc4.metric("Ausgewertete Jahre", f"{len(selected_result)}")
+                                            st.caption("Die Short-Trefferquote zählt Jahre mit negativer Kursrendite im markierten Kalenderfenster. Gebühren/Slippage sind nur über den eingestellten Round-trip-Kostenwert angenähert; historische Häufigkeiten sind keine Prognose.")
+                                            with st.expander("Jahresergebnisse für den markierten Bereich"):
+                                                st.dataframe(selected_result.assign(Rendite=selected_result["Rendite"].map(lambda value: f"{value:.2%}")), use_container_width=True, hide_index=True)
+                                        else:
+                                            st.info("Für den markierten Bereich konnten nicht genügend vollständige historische Jahresdaten gefunden werden.")
+                                    else:
+                                        st.info("Wähle mit gedrückter linker Maustaste mindestens zwei Punkte der Kurve aus, um die historische Long-/Short-Auswertung für diesen Zeitraum anzuzeigen.")
+
                                     st.markdown("#### Ergebnis für den ausgewählten Saisonbereich")
                                     m1, m2, m3, m4 = st.columns(4)
                                     m1.metric("Annualisierte Rendite*", "—" if pd.isna(annualized) else f"{annualized:.2%}")
